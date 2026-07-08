@@ -69,7 +69,10 @@ func (peer *Peer) keepKeyFreshReceiving() {
  * Every time the bind is updated a new routine is started for
  * IPv4 and IPv6 (separately)
  */
-func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.ReceiveFunc) {
+func (device *Device) RoutineReceiveIncoming(
+	maxBatchSize int,
+	recv conn.ReceiveFunc,
+) {
 	recvName := recv.PrettyName()
 	defer func() {
 		device.log.Verbosef("Routine: receive incoming %s - stopped", recvName)
@@ -132,9 +135,14 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 			}
 
 			// check size of packet
-
 			packet := bufsArrs[i][:size]
-			msgType := binary.LittleEndian.Uint32(packet[:4])
+
+			// get message padding and type based on information from S1-S4 and H1-H4
+			msgType, padding := device.DeterminePacketTypeAndPadding(packet, MessageUnknownType)
+			if padding > 0 {
+				copy(packet, packet[padding:])
+				packet = packet[:len(packet)-padding]
+			}
 
 			switch msgType {
 
@@ -276,7 +284,6 @@ func (device *Device) RoutineHandshake(id int) {
 	device.log.Verbosef("Routine: handshake worker %d - started", id)
 
 	for elem := range device.queue.handshake.c {
-
 		// handle cookie fields and ratelimiting
 
 		switch elem.msgType {
@@ -303,9 +310,14 @@ func (device *Device) RoutineHandshake(id int) {
 			// consume reply
 
 			if peer := entry.peer; peer.isRunning.Load() {
-				device.log.Verbosef("Receiving cookie response from %s", elem.endpoint.DstToString())
+				device.log.Verbosef(
+					"Receiving cookie response from %s",
+					elem.endpoint.DstToString(),
+				)
 				if !peer.cookieGenerator.ConsumeReply(&reply) {
-					device.log.Verbosef("Could not decrypt invalid cookie response")
+					device.log.Verbosef(
+						"Could not decrypt invalid cookie response",
+					)
 				}
 			}
 
@@ -347,9 +359,7 @@ func (device *Device) RoutineHandshake(id int) {
 
 		switch elem.msgType {
 		case MessageInitiationType:
-
 			// unmarshal
-
 			var msg MessageInitiation
 			err := msg.unmarshal(elem.packet)
 			if err != nil {
@@ -357,7 +367,8 @@ func (device *Device) RoutineHandshake(id int) {
 				goto skip
 			}
 
-			// consume initiation
+			// have to reassign msgType for ranged msgType to work
+			msg.Type = elem.msgType
 
 			peer := device.ConsumeMessageInitiation(&msg, elem.endpoint)
 			if peer == nil {
@@ -388,6 +399,9 @@ func (device *Device) RoutineHandshake(id int) {
 				device.log.Errorf("Failed to decode response message")
 				goto skip
 			}
+
+			// have to reassign msgType for ranged msgType to work
+			msg.Type = elem.msgType
 
 			// consume response
 
@@ -505,11 +519,28 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 				}
 
 			default:
-				device.log.Verbosef("Packet with invalid IP version from %v", peer)
+				device.log.Verbosef(
+					"Packet with invalid IP version from %v",
+					peer,
+				)
 				continue
 			}
 
-			bufs = append(bufs, elem.buffer[:MessageTransportOffsetContent+len(elem.packet)])
+			bufs = append(
+				bufs,
+				elem.buffer[:MessageTransportOffsetContent+len(elem.packet)],
+			)
+		}
+
+		peer.rxBytes.Add(rxBytesLen)
+		if validTailPacket >= 0 {
+			peer.SetEndpointFromPacket(elemsContainer.elems[validTailPacket].endpoint)
+			peer.keepKeyFreshReceiving()
+			peer.timersAnyAuthenticatedPacketTraversal()
+			peer.timersAnyAuthenticatedPacketReceived()
+		}
+		if dataPacketReceived {
+			peer.timersDataReceived()
 		}
 
 		peer.rxBytes.Add(rxBytesLen)
@@ -535,4 +566,58 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 		bufs = bufs[:0]
 		device.PutInboundElementsContainer(elemsContainer)
 	}
+}
+
+func (device *Device) DeterminePacketTypeAndPadding(packet []byte, expectedType uint32) (uint32, int) {
+	size := len(packet)
+
+	if expectedType == MessageUnknownType || expectedType == MessageInitiationType {
+		padding := device.paddings.init
+		header := device.headers.init
+
+		if size == padding+MessageInitiationSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageInitiationType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageResponseType {
+		padding := device.paddings.response
+		header := device.headers.response
+
+		if size == padding+MessageResponseSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageResponseType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageCookieReplyType {
+		padding := device.paddings.cookie
+		header := device.headers.cookie
+
+		if size == padding+MessageCookieReplySize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageCookieReplyType, padding
+			}
+		}
+	}
+
+	if expectedType == MessageUnknownType || expectedType == MessageTransportType {
+		padding := device.paddings.transport
+		header := device.headers.transport
+
+		if size >= padding+MessageTransportHeaderSize {
+			data := packet[padding:]
+			if header.Validate(binary.LittleEndian.Uint32(data)) {
+				return MessageTransportType, padding
+			}
+		}
+	}
+
+	return MessageUnknownType, 0
 }

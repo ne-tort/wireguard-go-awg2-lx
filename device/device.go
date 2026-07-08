@@ -93,6 +93,29 @@ type Device struct {
 	closed       chan struct{}
 	log          *Logger
 	pauseManager pause.Manager
+
+	// lx: AmneziaWG obfuscation state (grafted from amneziawg-go).
+	junk struct {
+		min   int
+		max   int
+		count int
+	}
+
+	headers struct {
+		init      *magicHeader
+		cookie    *magicHeader
+		response  *magicHeader
+		transport *magicHeader
+	}
+
+	paddings struct {
+		init      int
+		response  int
+		cookie    int
+		transport int
+	}
+
+	ipackets [5]*obfChain
 }
 
 // deviceState represents the state of a Device.
@@ -166,7 +189,8 @@ func (device *Device) changeState(want deviceState) (err error) {
 			err = errDown
 		}
 	}
-	device.log.Verbosef("Interface state was %s, requested %s, now %s", old, want, device.deviceState())
+	device.log.Verbosef(
+		"Interface state was %s, requested %s, now %s", old, want, device.deviceState())
 	return
 }
 
@@ -302,6 +326,11 @@ func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger
 	device.peers.keyMap = make(map[NoisePublicKey]*Peer)
 	device.rate.limiter.Init()
 	device.indexTable.Init()
+
+	device.headers.init = &magicHeader{start: MessageInitiationType, end: MessageInitiationType}
+	device.headers.response = &magicHeader{start: MessageResponseType, end: MessageResponseType}
+	device.headers.cookie = &magicHeader{start: MessageCookieReplyType, end: MessageCookieReplyType}
+	device.headers.transport = &magicHeader{start: MessageTransportType, end: MessageTransportType}
 
 	device.PopulatePools()
 

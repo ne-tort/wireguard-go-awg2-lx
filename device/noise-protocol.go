@@ -54,10 +54,11 @@ const (
 )
 
 const (
-	MessageInitiationType  = 1
-	MessageResponseType    = 2
-	MessageCookieReplyType = 3
-	MessageTransportType   = 4
+	MessageUnknownType     uint32 = 0
+	MessageInitiationType  uint32 = 1
+	MessageResponseType    uint32 = 2
+	MessageCookieReplyType uint32 = 3
+	MessageTransportType   uint32 = 4
 )
 
 const (
@@ -65,7 +66,7 @@ const (
 	MessageResponseSize               = 92                                            // size of response message
 	MessageCookieReplySize            = 64                                            // size of cookie reply message
 	MessageTransportHeaderSize        = 16                                            // size of data preceding content in transport message
-	MessageEncapsulatingTransportSize = 8                                             // size of optional, free (for use by conn.Bind.Send()) space preceding the transport header
+	MessageEncapsulatingTransportSize = 0                                             // lx: zeroed so AmneziaWG obfuscation composes without sagernet headroom (AWG path doesn't use the Bind.Send prepend)
 	MessageTransportSize              = MessageTransportHeaderSize + poly1305.TagSize // size of empty transport
 	MessageKeepaliveSize              = MessageTransportSize                          // size of keepalive
 	MessageHandshakeSize              = MessageInitiationSize                         // size of largest handshake related message
@@ -218,7 +219,7 @@ type Handshake struct {
 	localEphemeral            NoisePrivateKey          // ephemeral secret key
 	localIndex                uint32                   // used to clear hash-table
 	remoteIndex               uint32                   // index for sending
-	remoteStatic              NoisePublicKey           // long term key
+	remoteStatic              NoisePublicKey           // long term key, never changes, can be accessed without mutex
 	remoteEphemeral           NoisePublicKey           // ephemeral public key
 	precomputedStaticStatic   [NoisePublicKeySize]byte // precomputed shared secret
 	lastTimestamp             tai64n.Timestamp
@@ -287,8 +288,10 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 
 	handshake.mixHash(handshake.remoteStatic[:])
 
+	msgType := device.headers.init.Generate()
+
 	msg := MessageInitiation{
-		Type:      MessageInitiationType,
+		Type:      msgType,
 		Ephemeral: handshake.localEphemeral.publicKey(),
 	}
 
@@ -466,7 +469,7 @@ func (device *Device) CreateMessageResponse(peer *Peer) (*MessageResponse, error
 	}
 
 	var msg MessageResponse
-	msg.Type = MessageResponseType
+	msg.Type = device.headers.response.Generate()
 	msg.Sender = handshake.localIndex
 	msg.Receiver = handshake.remoteIndex
 

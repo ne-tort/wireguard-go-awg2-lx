@@ -97,6 +97,56 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("fwmark=%d", device.net.fwmark)
 		}
 
+		if device.junk.count != 0 {
+			sendf("jc=%d", device.junk.count)
+		}
+
+		if device.junk.min != 0 {
+			sendf("jmin=%d", device.junk.min)
+		}
+
+		if device.junk.max != 0 {
+			sendf("jmax=%d", device.junk.max)
+		}
+
+		if device.paddings.init != 0 {
+			sendf("s1=%d", device.paddings.init)
+		}
+
+		if device.paddings.response != 0 {
+			sendf("s2=%d", device.paddings.response)
+		}
+
+		if device.paddings.cookie != 0 {
+			sendf("s3=%d", device.paddings.cookie)
+		}
+
+		if device.paddings.transport != 0 {
+			sendf("s4=%d", device.paddings.transport)
+		}
+
+		if device.headers.init != nil {
+			sendf("h1=%s", device.headers.init.GenSpec())
+		}
+
+		if device.headers.response != nil {
+			sendf("h2=%s", device.headers.response.GenSpec())
+		}
+
+		if device.headers.cookie != nil {
+			sendf("h3=%s", device.headers.cookie.GenSpec())
+		}
+
+		if device.headers.transport != nil {
+			sendf("h4=%s", device.headers.transport.GenSpec())
+		}
+
+		for i, ipacket := range device.ipackets {
+			if ipacket != nil {
+				sendf("i%d=%s", i+1, ipacket.Spec)
+			}
+		}
+
 		for _, peer := range device.peers.keyMap {
 			// Serialize peer state.
 			peer.handshake.mutex.RLock()
@@ -147,6 +197,7 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 		}
 	}()
 
+	ipcDev := new(ipcSetDevice)
 	peer := new(ipcSetPeer)
 	deviceConfig := true
 
@@ -155,12 +206,20 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 		line := scanner.Text()
 		if line == "" {
 			// Blank line means terminate operation.
+			err := ipcDev.mergeWithDevice(device)
+			if err != nil {
+				return ipcErrorf(ipc.IpcErrorInvalid, "failed to merge with device: %w", err)
+			}
 			peer.handlePostConfig()
 			return nil
 		}
 		key, value, ok := strings.Cut(line, "=")
 		if !ok {
-			return ipcErrorf(ipc.IpcErrorProtocol, "failed to parse line %q", line)
+			return ipcErrorf(
+				ipc.IpcErrorProtocol,
+				"failed to parse line %q",
+				line,
+			)
 		}
 
 		if key == "public_key" {
@@ -185,6 +244,10 @@ func (device *Device) IpcSetOperation(r io.Reader) (err error) {
 		if err != nil {
 			return err
 		}
+	}
+	err = ipcDev.mergeWithDevice(device)
+	if err != nil {
+		return ipcErrorf(ipc.IpcErrorInvalid, "failed to merge with device: %w", err)
 	}
 	peer.handlePostConfig()
 
@@ -235,10 +298,154 @@ func (device *Device) handleDeviceLine(key, value string) error {
 
 	case "replace_peers":
 		if value != "true" {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set replace_peers, invalid value: %v", value)
+			return ipcErrorf(
+				ipc.IpcErrorInvalid,
+				"failed to set replace_peers, invalid value: %v",
+				value,
+			)
 		}
 		device.log.Verbosef("UAPI: Removing all peers")
 		device.RemoveAllPeers()
+
+	case "jc":
+		jc, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jc: %w", err)
+		}
+		if jc <= 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "jc must be a positive value")
+		}
+		device.log.Verbosef("UAPI: Updating junk count")
+		device.junk.count = jc
+
+	case "jmin":
+		jmin, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmin: %w", err)
+		}
+		if jmin <= 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "jmin must be a positive value")
+		}
+		device.log.Verbosef("UAPI: Updating junk min")
+		device.junk.min = jmin
+
+	case "jmax":
+		jmax, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmax: %w", err)
+		}
+		if jmax <= 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "jmax must be a positive value")
+		}
+		device.log.Verbosef("UAPI: Updating junk max")
+		device.junk.max = jmax
+
+	case "s1":
+		padding, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s1: %w", err)
+		}
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s1 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s1 padding")
+		device.paddings.init = padding
+
+	case "s2":
+		padding, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s2: %w", err)
+		}
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s2 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s2 padding")
+		device.paddings.response = padding
+
+	case "s3":
+		padding, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s3: %w", err)
+		}
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s3 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s3 padding")
+		device.paddings.cookie = padding
+
+	case "s4":
+		padding, err := strconv.Atoi(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s4: %w", err)
+		}
+		if padding < 0 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "s4 must be non-negative")
+		}
+		device.log.Verbosef("UAPI: Updating s4 padding")
+		device.paddings.transport = padding
+
+	case "h1":
+		header, err := newMagicHeader(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H1: %w", err)
+		}
+		device.headers.init = header
+
+	case "h2":
+		header, err := newMagicHeader(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H2: %w", err)
+		}
+		device.headers.response = header
+
+	case "h3":
+		header, err := newMagicHeader(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H3: %w", err)
+		}
+		device.headers.cookie = header
+
+	case "h4":
+		header, err := newMagicHeader(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse H4: %w", err)
+		}
+		device.headers.transport = header
+
+	case "i1":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I1: %w", err)
+		}
+		device.ipackets[0] = chain
+
+	case "i2":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I2: %w", err)
+		}
+		device.ipackets[1] = chain
+
+	case "i3":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I3: %w", err)
+		}
+		device.ipackets[2] = chain
+
+	case "i4":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I4: %w", err)
+		}
+		device.ipackets[3] = chain
+
+	case "i5":
+		chain, err := newObfChain(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I5: %w", err)
+		}
+		device.ipackets[4] = chain
 
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
@@ -271,7 +478,10 @@ func (peer *ipcSetPeer) handlePostConfig() {
 	}
 }
 
-func (device *Device) handlePublicKeyLine(peer *ipcSetPeer, value string) error {
+func (device *Device) handlePublicKeyLine(
+	peer *ipcSetPeer,
+	value string,
+) error {
 	// Load/create the peer we are configuring.
 	var publicKey NoisePublicKey
 	err := publicKey.FromHex(value)
@@ -301,12 +511,19 @@ func (device *Device) handlePublicKeyLine(peer *ipcSetPeer, value string) error 
 	return nil
 }
 
-func (device *Device) handlePeerLine(peer *ipcSetPeer, key, value string) error {
+func (device *Device) handlePeerLine(
+	peer *ipcSetPeer,
+	key, value string,
+) error {
 	switch key {
 	case "update_only":
 		// allow disabling of creation
 		if value != "true" {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set update only, invalid value: %v", value)
+			return ipcErrorf(
+				ipc.IpcErrorInvalid,
+				"failed to set update only, invalid value: %v",
+				value,
+			)
 		}
 		if peer.created && !peer.dummy {
 			device.RemovePeer(peer.handshake.remoteStatic)
@@ -352,7 +569,11 @@ func (device *Device) handlePeerLine(peer *ipcSetPeer, key, value string) error 
 
 		secs, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set persistent keepalive interval: %w", err)
+			return ipcErrorf(
+				ipc.IpcErrorInvalid,
+				"failed to set persistent keepalive interval: %w",
+				err,
+			)
 		}
 
 		old := peer.persistentKeepaliveInterval.Swap(uint32(secs))
@@ -363,7 +584,11 @@ func (device *Device) handlePeerLine(peer *ipcSetPeer, key, value string) error 
 	case "replace_allowed_ips":
 		device.log.Verbosef("%v - UAPI: Removing all allowedips", peer.Peer)
 		if value != "true" {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to replace allowedips, invalid value: %v", value)
+			return ipcErrorf(
+				ipc.IpcErrorInvalid,
+				"failed to replace allowedips, invalid value: %v",
+				value,
+			)
 		}
 		if peer.dummy {
 			return nil
@@ -442,7 +667,11 @@ func (device *Device) IpcHandle(socket net.Conn) {
 				return
 			}
 			if nextByte != '\n' {
-				err = ipcErrorf(ipc.IpcErrorInvalid, "trailing character in UAPI get: %q", nextByte)
+				err = ipcErrorf(
+					ipc.IpcErrorInvalid,
+					"trailing character in UAPI get: %q",
+					nextByte,
+				)
 				break
 			}
 			err = device.IpcGetOperation(buffered.Writer)
@@ -465,4 +694,50 @@ func (device *Device) IpcHandle(socket net.Conn) {
 		}
 		buffered.Flush()
 	}
+}
+
+type ipcSetDevice struct {
+	headers struct {
+		init      *magicHeader
+		response  *magicHeader
+		cookie    *magicHeader
+		transport *magicHeader
+	}
+}
+
+func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
+	if d.headers.init == nil {
+		d.headers.init = device.headers.init
+	}
+
+	if d.headers.response == nil {
+		d.headers.response = device.headers.response
+	}
+
+	if d.headers.cookie == nil {
+		d.headers.cookie = device.headers.cookie
+	}
+
+	if d.headers.transport == nil {
+		d.headers.transport = device.headers.transport
+	}
+
+	headers := []*magicHeader{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
+	for i := 0; i < len(headers); i++ {
+		for j := i + 1; j < len(headers); j++ {
+			left := headers[i]
+			right := headers[j]
+
+			if left.start <= right.end && right.start <= left.end {
+				return errors.New("headers must not overlap")
+			}
+		}
+	}
+
+	device.headers.init = d.headers.init
+	device.headers.response = d.headers.response
+	device.headers.cookie = d.headers.cookie
+	device.headers.transport = d.headers.transport
+
+	return nil
 }
