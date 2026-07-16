@@ -3,10 +3,25 @@ package device
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 type obfBuilder func(val string) (obf, error)
+
+// parseObfLen parses and bounds an obfuscator length argument: a negative
+// value would panic slice bounds in obfChain.Obfuscate, a huge one would
+// OOM in the handshake-time make (SendHandshakeInitiation).
+func parseObfLen(val string) (int, error) {
+	length, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, err
+	}
+	if length < 0 || length > MaxMessageSize {
+		return 0, fmt.Errorf("obfuscator length %d out of range [0, %d]", length, MaxMessageSize)
+	}
+	return length, nil
+}
 
 var obfBuilders = map[string]obfBuilder{
 	"b":  newBytesObf,
