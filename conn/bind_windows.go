@@ -461,7 +461,7 @@ func (bind *WinRingBind) receiveIPv4(bufs [][]byte, sizes []int, eps []Endpoint)
 	bind.mu.RLock()
 	defer bind.mu.RUnlock()
 	n, ep, err := bind.v4.Receive(bufs[0], &bind.isOpen)
-	if n > 3 {
+	if n > 3 && bind.hasReserved() { // lx: only strip reserved bytes for WARP (see hasReserved)
 		common.ClearArray(bufs[0][1:4])
 	}
 	sizes[0] = n
@@ -473,7 +473,7 @@ func (bind *WinRingBind) receiveIPv6(bufs [][]byte, sizes []int, eps []Endpoint)
 	bind.mu.RLock()
 	defer bind.mu.RUnlock()
 	n, ep, err := bind.v6.Receive(bufs[0], &bind.isOpen)
-	if n > 3 {
+	if n > 3 && bind.hasReserved() { // lx: only strip reserved bytes for WARP (see hasReserved)
 		common.ClearArray(bufs[0][1:4])
 	}
 	sizes[0] = n
@@ -574,6 +574,18 @@ func (bind *WinRingBind) SetReservedForEndpoint(destination netip.AddrPort, rese
 		panic(E.Cause(err, "parse destination as WinRingEndpoint"))
 	}
 	bind.reservedForEndpoint[*endpoint.(*WinRingEndpoint)] = reserved
+}
+
+// lx: hasReserved reports whether any Cloudflare "reserved" value is set. See
+// the StdNetBind.hasReserved comment — the unconditional receive clear would
+// corrupt an AmneziaWG magic header sitting in bytes 1-3 (small padding).
+func (bind *WinRingBind) hasReserved() bool {
+	for _, reserved := range bind.reservedForEndpoint {
+		if reserved != [3]uint8{} {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *StdNetBind) BindSocketToInterface4(interfaceIndex uint32, blackhole bool) error {

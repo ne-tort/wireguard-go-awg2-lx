@@ -188,10 +188,10 @@ func (t *chanTun) Write(bufs [][]byte, offset int) (int, error) {
 	return len(bufs), nil
 }
 
-func (t *chanTun) MTU() (int, error)         { return DefaultMTU, nil }
-func (t *chanTun) Name() (string, error)     { return "chantun", nil }
-func (t *chanTun) Events() <-chan tun.Event  { return t.events }
-func (t *chanTun) BatchSize() int            { return 1 }
+func (t *chanTun) MTU() (int, error)        { return DefaultMTU, nil }
+func (t *chanTun) Name() (string, error)    { return "chantun", nil }
+func (t *chanTun) Events() <-chan tun.Event { return t.events }
+func (t *chanTun) BatchSize() int           { return 1 }
 
 func (t *chanTun) Close() error {
 	t.closeOnce.Do(func() {

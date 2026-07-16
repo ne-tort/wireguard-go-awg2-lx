@@ -333,7 +333,7 @@ func (s *StdNetBind) receiveIP(
 		if sizes[i] == 0 {
 			continue
 		}
-		if msg.N > 3 {
+		if msg.N > 3 && s.hasReserved() { // lx: only strip reserved bytes for WARP (see hasReserved)
 			common.ClearArray(bufs[i][1:4])
 		}
 		ep := &StdNetEndpoint{AddrPort: M.AddrPortFromNet(msg.Addr)} // TODO: remove allocation
@@ -495,6 +495,20 @@ retry:
 
 func (s *StdNetBind) SetReservedForEndpoint(destination netip.AddrPort, reserved [3]byte) {
 	s.reservedForEndpoint[destination] = reserved
+}
+
+// lx: hasReserved reports whether any Cloudflare "reserved" value is set. The
+// receive path must only zero bytes 1-3 when a reserved value exists (WARP);
+// otherwise an AmneziaWG magic header that lands in bytes 1-3 (small s1/s2/s4
+// padding) would be corrupted and the packet dropped. The send path already
+// gates its stamp on a per-endpoint `loaded` check, so no change is needed there.
+func (s *StdNetBind) hasReserved() bool {
+	for _, reserved := range s.reservedForEndpoint {
+		if reserved != [3]uint8{} {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message) error {

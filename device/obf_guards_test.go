@@ -23,8 +23,8 @@ func TestParseObfLen(t *testing.T) {
 		{"0", 0, false},
 		{"100", 100, false},
 		{fmt.Sprintf("%d", MaxMessageSize), MaxMessageSize, false},
-		{"-1", 0, true},                               // would panic slice bounds in Obfuscate
-		{fmt.Sprintf("%d", MaxMessageSize + 1), 0, true}, // would OOM the handshake make
+		{"-1", 0, true}, // would panic slice bounds in Obfuscate
+		{fmt.Sprintf("%d", MaxMessageSize+1), 0, true}, // would OOM the handshake make
 		{"2000000000", 0, true},
 		{"abc", 0, true},
 	}
