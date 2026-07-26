@@ -555,6 +555,9 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 				continue
 			}
 
+			// lx: awg — match amneziawg-go v3 RoutineSequentialReceiver: S-padding
+			// sits before the transport header; TUN Write offset is still
+			// MessageTransportOffsetContent into this slice.
 			bufs = append(
 				bufs,
 				elem.buffer[int(elem.padding):int(elem.padding)+MessageTransportOffsetContent+len(elem.packet)],

@@ -758,6 +758,9 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			if elem.packet == nil {
 				continue
 			}
+			// lx: awg — amneziawg-go v3.0.1 compares against MessageKeepaliveSize
+			// only (ignores S4), so with S4>0 every keepalive looks like data.
+			// Count the leading S-padding so timers match real keepalive size.
 			if len(elem.packet) != int(elem.padding)+MessageKeepaliveSize {
 				dataSent = true
 			}
