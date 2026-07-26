@@ -557,19 +557,8 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 
 			bufs = append(
 				bufs,
-				elem.buffer[:MessageTransportOffsetContent+len(elem.packet)],
+				elem.buffer[int(elem.padding):int(elem.padding)+MessageTransportOffsetContent+len(elem.packet)],
 			)
-		}
-
-		peer.rxBytes.Add(rxBytesLen)
-		if validTailPacket >= 0 {
-			peer.SetEndpointFromPacket(elemsContainer.elems[validTailPacket].endpoint)
-			peer.keepKeyFreshReceiving()
-			peer.timersAnyAuthenticatedPacketTraversal()
-			peer.timersAnyAuthenticatedPacketReceived()
-		}
-		if dataPacketReceived {
-			peer.timersDataReceived()
 		}
 
 		peer.rxBytes.Add(rxBytesLen)
