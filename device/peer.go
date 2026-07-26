@@ -59,6 +59,9 @@ type Peer struct {
 	cookieGenerator             CookieGenerator
 	trieEntries                 list.List
 	persistentKeepaliveInterval AtomicUintRange
+
+	// lx: optional per-peer upload/download caps (UAPI up_mbps/down_mbps).
+	bandwidth BandwidthPair
 }
 
 func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {

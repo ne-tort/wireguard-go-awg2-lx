@@ -167,8 +167,15 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		if timing := device.timings.keepaliveTimeoutSec.Load(); !timing.IsZero() {
 			sendf("keepalive_timeout=%s", timing.ToString())
 		}
-		if rang := device.timings.maxHandshakeAttemps.Load(); !rang.IsZero() {
-			sendf("max_handshake_attempts=%s", rang.ToString())
+		if timing := device.timings.maxHandshakeAttemps.Load(); !timing.IsZero() {
+			sendf("max_handshake_attempts=%s", timing.ToString())
+		}
+
+		if mbps := device.bandwidth.UpMbps(); mbps != 0 {
+			sendf("up_mbps=%d", mbps)
+		}
+		if mbps := device.bandwidth.DownMbps(); mbps != 0 {
+			sendf("down_mbps=%d", mbps)
 		}
 
 		for _, peer := range device.peers.keyMap {
@@ -194,6 +201,12 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("rx_bytes=%d", peer.rxBytes.Load())
 			if keepalive := peer.persistentKeepaliveInterval.Load(); !keepalive.IsZero() {
 				sendf("persistent_keepalive_interval=%s", keepalive.ToString())
+			}
+			if mbps := peer.bandwidth.UpMbps(); mbps != 0 {
+				sendf("up_mbps=%d", mbps)
+			}
+			if mbps := peer.bandwidth.DownMbps(); mbps != 0 {
+				sendf("down_mbps=%d", mbps)
 			}
 
 			device.allowedips.EntriesForPeer(peer, func(prefix netip.Prefix) bool {
@@ -509,6 +522,22 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.log.Verbosef("UAPI: Updating max handshake attempts")
 		device.timings.maxHandshakeAttemps.Store(rang)
 
+	case "up_mbps":
+		mbps, err := parseMbpsUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse up_mbps: %w", err)
+		}
+		device.log.Verbosef("UAPI: Updating device up_mbps")
+		device.bandwidth.SetUpMbps(mbps)
+
+	case "down_mbps":
+		mbps, err := parseMbpsUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse down_mbps: %w", err)
+		}
+		device.log.Verbosef("UAPI: Updating device down_mbps")
+		device.bandwidth.SetDownMbps(mbps)
+
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
 	}
@@ -638,6 +667,26 @@ func (device *Device) handlePeerLine(
 
 		// Send immediate keepalive if we're turning it on and before it wasn't on.
 		peer.pkaOn = old.IsZero() && !rang.IsZero()
+
+	case "up_mbps":
+		mbps, err := parseMbpsUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse up_mbps: %w", err)
+		}
+		if !peer.dummy {
+			device.log.Verbosef("%v - UAPI: Updating up_mbps", peer.Peer)
+			peer.bandwidth.SetUpMbps(mbps)
+		}
+
+	case "down_mbps":
+		mbps, err := parseMbpsUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse down_mbps: %w", err)
+		}
+		if !peer.dummy {
+			device.log.Verbosef("%v - UAPI: Updating down_mbps", peer.Peer)
+			peer.bandwidth.SetDownMbps(mbps)
+		}
 
 	case "replace_allowed_ips":
 		device.log.Verbosef("%v - UAPI: Removing all allowedips", peer.Peer)

@@ -575,6 +575,16 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 			peer.timersDataReceived()
 		}
 		if len(bufs) > 0 {
+			// lx: bandwidth — shape plaintext delivered to TUN (system + userspace).
+			downBytes := 0
+			for _, b := range bufs {
+				if n := len(b) - MessageTransportOffsetContent; n > 0 {
+					downBytes += n
+				}
+			}
+			if downBytes > 0 {
+				peer.shapeDownload(downBytes)
+			}
 			_, err := device.tun.device.Write(bufs, MessageTransportOffsetContent)
 			if err != nil && !device.isClosed() {
 				device.log.Errorf("Failed to write packets to TUN device: %v", err)

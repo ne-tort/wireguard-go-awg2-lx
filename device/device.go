@@ -66,6 +66,9 @@ type Device struct {
 		limiter        ratelimiter.Ratelimiter
 	}
 
+	// lx: optional device-global upload/download caps (UAPI up_mbps/down_mbps).
+	bandwidth BandwidthPair
+
 	allowedips    AllowedIPs
 	indexTable    IndexTable
 	cookieChecker CookieChecker

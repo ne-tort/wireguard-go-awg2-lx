@@ -753,6 +753,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			continue
 		}
 		dataSent := false
+		dataBytes := 0
 		elemsContainer.Lock()
 		for _, elem := range elemsContainer.elems {
 			if elem.packet == nil {
@@ -763,12 +764,18 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			// Count the leading S-padding so timers match real keepalive size.
 			if len(elem.packet) != int(elem.padding)+MessageKeepaliveSize {
 				dataSent = true
+				dataBytes += len(elem.packet)
 			}
 			bufs = append(bufs, elem.packet)
 		}
 
 		peer.timersAnyAuthenticatedPacketTraversal()
 		peer.timersAnyAuthenticatedPacketSent()
+
+		// lx: bandwidth — shape data only (keepalive/handshake excluded).
+		if dataBytes > 0 {
+			peer.shapeUpload(dataBytes)
+		}
 
 		err := peer.SendBuffers(bufs)
 		if dataSent {
