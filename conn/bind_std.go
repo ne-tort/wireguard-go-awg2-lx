@@ -33,6 +33,11 @@ var _ Bind = (*StdNetBind)(nil)
 type StdNetBind struct {
 	externalControl     control.Func
 	reservedForEndpoint map[netip.AddrPort][3]uint8
+	// lx: awg — when true, do not touch UDP payload bytes [1:4]. Those are
+	// Cloudflare WARP "reserved" bytes for plain WireGuard; AmneziaWG uses the
+	// same offsets for S-padding (HP ChaCha20 nonce) and/or a full uint32 magic
+	// header, so clearing them breaks AWG3 header protection and S=0 headers.
+	skipReserved bool
 
 	mu            sync.Mutex // protects all fields except as specified
 	ipv4          *net.UDPConn
@@ -333,7 +338,7 @@ func (s *StdNetBind) receiveIP(
 		if sizes[i] == 0 {
 			continue
 		}
-		if msg.N > 3 {
+		if !s.skipReserved && msg.N > 3 {
 			common.ClearArray(bufs[i][1:4])
 		}
 		ep := &StdNetEndpoint{AddrPort: M.AddrPortFromNet(msg.Addr)} // TODO: remove allocation
@@ -455,11 +460,13 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
 		retried bool
 		err     error
 	)
-	for _, buf := range bufs {
-		if len(buf) > offset+3 {
-			reserved, loaded := s.reservedForEndpoint[endpoint.(*StdNetEndpoint).AddrPort]
-			if loaded {
-				copy(buf[offset+1:offset+4], reserved[:])
+	if !s.skipReserved {
+		for _, buf := range bufs {
+			if len(buf) > offset+3 {
+				reserved, loaded := s.reservedForEndpoint[endpoint.(*StdNetEndpoint).AddrPort]
+				if loaded {
+					copy(buf[offset+1:offset+4], reserved[:])
+				}
 			}
 		}
 	}
@@ -495,6 +502,11 @@ retry:
 
 func (s *StdNetBind) SetReservedForEndpoint(destination netip.AddrPort, reserved [3]byte) {
 	s.reservedForEndpoint[destination] = reserved
+}
+
+// SetSkipReserved disables WARP reserved-byte rewrite (lx: awg).
+func (s *StdNetBind) SetSkipReserved(skip bool) {
+	s.skipReserved = skip
 }
 
 func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message) error {

@@ -234,7 +234,7 @@ func (s *StdNetBind) receiveSingle(conn *net.UDPConn, bufs [][]byte, sizes []int
 		return 0, err
 	}
 	sizes[0] = n
-	if n > 3 {
+	if !s.skipReserved && n > 3 {
 		bufs[0][1] = 0
 		bufs[0][2] = 0
 		bufs[0][3] = 0
@@ -299,7 +299,7 @@ func (s *StdNetBind) makeReceiveMsgX(conn *net.UDPConn, isV6 bool) (ReceiveFunc,
 		numMsgs := int(n)
 		for i := 0; i < numMsgs; i++ {
 			sizes[i] = int(state.hdrs[i].DataLen)
-			if sizes[i] > 3 {
+			if !s.skipReserved && sizes[i] > 3 {
 				bufs[i][1] = 0
 				bufs[i][2] = 0
 				bufs[i][3] = 0

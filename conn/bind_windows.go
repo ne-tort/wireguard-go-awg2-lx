@@ -77,6 +77,7 @@ type afWinRingBind struct {
 type WinRingBind struct {
 	externalControl     control.Func
 	reservedForEndpoint map[WinRingEndpoint][3]uint8
+	skipReserved        bool // lx: awg — see StdNetBind.skipReserved
 
 	v4, v6 afWinRingBind
 	mu     sync.RWMutex
@@ -461,7 +462,7 @@ func (bind *WinRingBind) receiveIPv4(bufs [][]byte, sizes []int, eps []Endpoint)
 	bind.mu.RLock()
 	defer bind.mu.RUnlock()
 	n, ep, err := bind.v4.Receive(bufs[0], &bind.isOpen)
-	if n > 3 {
+	if !bind.skipReserved && n > 3 {
 		common.ClearArray(bufs[0][1:4])
 	}
 	sizes[0] = n
@@ -473,7 +474,7 @@ func (bind *WinRingBind) receiveIPv6(bufs [][]byte, sizes []int, eps []Endpoint)
 	bind.mu.RLock()
 	defer bind.mu.RUnlock()
 	n, ep, err := bind.v6.Receive(bufs[0], &bind.isOpen)
-	if n > 3 {
+	if !bind.skipReserved && n > 3 {
 		common.ClearArray(bufs[0][1:4])
 	}
 	sizes[0] = n
@@ -542,7 +543,7 @@ func (bind *WinRingBind) Send(bufs [][]byte, endpoint Endpoint, offset int) erro
 	defer bind.mu.RUnlock()
 	for _, buf := range bufs {
 		buf = buf[offset:]
-		if len(buf) > 3 {
+		if !bind.skipReserved && len(buf) > 3 {
 			reserved, loaded := bind.reservedForEndpoint[*endpoint.(*WinRingEndpoint)]
 			if loaded {
 				copy(buf[1:4], reserved[:])
@@ -574,6 +575,11 @@ func (bind *WinRingBind) SetReservedForEndpoint(destination netip.AddrPort, rese
 		panic(E.Cause(err, "parse destination as WinRingEndpoint"))
 	}
 	bind.reservedForEndpoint[*endpoint.(*WinRingEndpoint)] = reserved
+}
+
+// SetSkipReserved disables WARP reserved-byte rewrite (lx: awg).
+func (bind *WinRingBind) SetSkipReserved(skip bool) {
+	bind.skipReserved = skip
 }
 
 func (s *StdNetBind) BindSocketToInterface4(interfaceIndex uint32, blackhole bool) error {
