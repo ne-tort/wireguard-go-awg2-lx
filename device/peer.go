@@ -41,6 +41,7 @@ type Peer struct {
 		zeroKeyMaterial         *Timer
 		persistentKeepalive     *Timer
 		handshakeAttempts       atomic.Uint32
+		maxHandshakeAttempts    atomic.Uint32
 		needAnotherKeepalive    atomic.Bool
 		sentLastMinuteHandshake atomic.Bool
 	}
@@ -57,7 +58,7 @@ type Peer struct {
 
 	cookieGenerator             CookieGenerator
 	trieEntries                 list.List
-	persistentKeepaliveInterval atomic.Uint32
+	persistentKeepaliveInterval AtomicUintRange
 }
 
 func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {

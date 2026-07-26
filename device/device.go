@@ -96,26 +96,41 @@ type Device struct {
 
 	// lx: AmneziaWG obfuscation state (grafted from amneziawg-go).
 	junk struct {
-		min   int
-		max   int
-		count int
+		min   atomic.Uint32
+		max   atomic.Uint32
+		count atomic.Uint32
 	}
 
 	headers struct {
-		init      *magicHeader
-		cookie    *magicHeader
-		response  *magicHeader
-		transport *magicHeader
+		init      AtomicUintRange
+		cookie    AtomicUintRange
+		response  AtomicUintRange
+		transport AtomicUintRange
 	}
 
 	paddings struct {
-		init      int
-		response  int
-		cookie    int
-		transport int
+		init      atomic.Uint32
+		response  atomic.Uint32
+		cookie    atomic.Uint32
+		transport atomic.Uint32
 	}
 
 	ipackets [5]*obfChain
+
+	headerProtection struct {
+		sync.RWMutex
+		key HeaderCipherKey
+	}
+
+	contentPaddingAddition AtomicUintRange
+
+	timings struct {
+		rekeyAfterTimeSec   AtomicUintRange
+		rekeyTimeoutSec     AtomicUintRange
+		rejectAfterTimeSec  AtomicUintRange
+		keepaliveTimeoutSec AtomicUintRange
+		maxHandshakeAttemps AtomicUintRange
+	}
 }
 
 // deviceState represents the state of a Device.
@@ -210,7 +225,7 @@ func (device *Device) upLocked() error {
 	device.peers.RLock()
 	for _, peer := range device.peers.keyMap {
 		peer.Start()
-		if peer.persistentKeepaliveInterval.Load() > 0 {
+		if !peer.persistentKeepaliveInterval.Load().IsZero() {
 			peer.SendKeepalive()
 		}
 	}
@@ -310,6 +325,8 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 }
 
 func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int) *Device {
+	var rang UintRange
+
 	device := new(Device)
 	device.pauseManager = service.FromContext[pause.Manager](ctx)
 	device.state.state.Store(uint32(deviceStateDown))
@@ -327,10 +344,14 @@ func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger
 	device.rate.limiter.Init()
 	device.indexTable.Init()
 
-	device.headers.init = &magicHeader{start: MessageInitiationType, end: MessageInitiationType}
-	device.headers.response = &magicHeader{start: MessageResponseType, end: MessageResponseType}
-	device.headers.cookie = &magicHeader{start: MessageCookieReplyType, end: MessageCookieReplyType}
-	device.headers.transport = &magicHeader{start: MessageTransportType, end: MessageTransportType}
+	rang.FromUint32(MessageInitiationType, MessageInitiationType)
+	device.headers.init.Store(rang)
+	rang.FromUint32(MessageResponseType, MessageResponseType)
+	device.headers.response.Store(rang)
+	rang.FromUint32(MessageCookieReplyType, MessageCookieReplyType)
+	device.headers.cookie.Store(rang)
+	rang.FromUint32(MessageTransportType, MessageTransportType)
+	device.headers.transport.Store(rang)
 
 	device.PopulatePools()
 
@@ -444,10 +465,12 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 		return
 	}
 
+	timeout := device.keychainExpireTime()
+
 	device.peers.RLock()
 	for _, peer := range device.peers.keyMap {
 		peer.keypairs.RLock()
-		sendKeepalive := peer.keypairs.current != nil && !peer.keypairs.current.created.Add(RejectAfterTime).Before(time.Now())
+		sendKeepalive := peer.keypairs.current != nil && !peer.keypairs.current.created.Add(timeout).Before(time.Now())
 		peer.keypairs.RUnlock()
 		if sendKeepalive {
 			peer.SendKeepalive()
