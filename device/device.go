@@ -134,6 +134,15 @@ type Device struct {
 		keepaliveTimeoutSec AtomicUintRange
 		maxHandshakeAttemps AtomicUintRange
 	}
+
+	// lx: SPEC 041F — passive self-heal state (giveup / early / nudge).
+	// Mechanism lives in lx_giveup_rebind.go. Enabled by default; sing-box
+	// decides freshPort from whether the user pinned listen_port.
+	giveUpRebind struct {
+		enabled   atomic.Bool
+		freshPort atomic.Bool
+		last      atomic.Int64 // unix seconds of the last rebind (debounce)
+	}
 }
 
 // deviceState represents the state of a Device.
@@ -332,6 +341,7 @@ func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger
 
 	device := new(Device)
 	device.pauseManager = service.FromContext[pause.Manager](ctx)
+	device.giveUpRebind.enabled.Store(true) // lx: SPEC 041F — self-heal on by default
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger

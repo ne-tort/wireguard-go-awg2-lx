@@ -100,9 +100,16 @@ func expiredRetransmitHandshake(peer *Peer) {
 		if peer.timersActive() && !peer.timers.zeroKeyMaterial.IsPending() {
 			peer.timers.zeroKeyMaterial.Mod(peer.device.keychainExpireTime() * 3)
 		}
+
+		/* lx: SPEC 041F — the exhausted cycle just proved the current socket's
+		 * 5-tuple dead. Rebind once and re-initiate (see lx_giveup_rebind.go). */
+		peer.device.handleHandshakeGiveUp(peer)
 	} else {
 		peer.timers.handshakeAttempts.Add(1)
 		peer.device.log.Verbosef("%s - Handshake did not complete after %d seconds, retrying (try %d)", peer, int(peer.retransmitHandshakeTimeout().Seconds()), peer.timers.handshakeAttempts.Load()+1)
+
+		/* lx: SPEC 041F v2 — early self-heal on provably dead session. */
+		peer.device.maybeEarlyGiveUpRebind(peer)
 
 		/* We clear the endpoint address src address, in case this is the cause of trouble. */
 		peer.markEndpointSrcForClearing()
