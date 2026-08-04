@@ -9,20 +9,22 @@ package device
 
 import "sync"
 
-const lxObfReplayCap = 2048
+const pathologyReplayCap = 2048
 
-type lxObfReplayCache struct {
-	mu   sync.Mutex
-	seen map[[12]byte]struct{}
-	order [][12]byte
+type pathologyReplayCache struct {
+	mu    sync.Mutex
+	seen  map[[12]byte]struct{}
+	order [pathologyReplayCap][12]byte
+	pos   int
+	full  bool
 }
 
-func newLxObfReplayCache() *lxObfReplayCache {
-	return &lxObfReplayCache{seen: make(map[[12]byte]struct{}, lxObfReplayCap)}
+func newPathologyReplayCache() *pathologyReplayCache {
+	return &pathologyReplayCache{seen: make(map[[12]byte]struct{}, pathologyReplayCap)}
 }
 
 // checkAndAdd returns false if nonce was already observed (replay).
-func (c *lxObfReplayCache) checkAndAdd(nonce []byte) bool {
+func (c *pathologyReplayCache) checkAndAdd(nonce []byte) bool {
 	if c == nil || len(nonce) != 12 {
 		return true
 	}
@@ -33,12 +35,16 @@ func (c *lxObfReplayCache) checkAndAdd(nonce []byte) bool {
 	if _, ok := c.seen[key]; ok {
 		return false
 	}
-	if len(c.order) >= lxObfReplayCap {
-		old := c.order[0]
-		c.order = c.order[1:]
+	if c.full {
+		old := c.order[c.pos]
 		delete(c.seen, old)
 	}
+	c.order[c.pos] = key
 	c.seen[key] = struct{}{}
-	c.order = append(c.order, key)
+	c.pos++
+	if c.pos >= pathologyReplayCap {
+		c.pos = 0
+		c.full = true
+	}
 	return true
 }

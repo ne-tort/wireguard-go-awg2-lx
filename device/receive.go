@@ -133,25 +133,39 @@ func (device *Device) RoutineReceiveIncoming(
 
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
-			if size < MinMessageSize {
+			if size < 1 {
 				continue
 			}
 
 			// check size of packet
 			packet := bufsArrs[i][:size]
 
-			// lx:begin lx_obf
-			if device.lxObfEnabled() {
-				opened, err := device.lxObfOpen(packet)
-				if err != nil {
-					if isLxObfCover(err) {
-						continue // T-START/T-IDLE cover — silent drop
+			// lx:begin pathology
+			if device.pathologyEnabled() {
+				// T-DIALOG: synthesize legend response before MinMessageSize gate
+				// (DNS/STUN req can be < WG minimum).
+				if reply, ok := device.pathologyMaybeDialogReply(packet); ok {
+					ep := endpoints[i]
+					if ep != nil && len(reply) > 0 {
+						device.net.RLock()
+						_ = device.net.bind.Send([][]byte{reply}, ep, MessageEncapsulatingTransportSize)
+						device.net.RUnlock()
 					}
-					device.log.Verbosef("lx_obf: open failed (%v), drop len=%d", err, len(packet))
+					continue
+				}
+				if size < MinMessageSize {
+					continue
+				}
+				opened, err := device.pathologyOpen(packet)
+				if err != nil {
+					if isPathologyCover(err) {
+						continue // T-START/T-IDLE/dialog resp — silent drop
+					}
+					device.log.Verbosef("pathology: open failed (%v), drop len=%d", err, len(packet))
 					continue // silence on demorph failure (TECHNIQUES T-PROBE)
 				}
 				if len(opened) < MinMessageSize {
-					device.log.Verbosef("lx_obf: demorphed packet too short len=%d", len(opened))
+					device.log.Verbosef("pathology: demorphed packet too short len=%d", len(opened))
 					continue
 				}
 				// Copy back into the pooled message buffer so later stages that
@@ -161,8 +175,10 @@ func (device *Device) RoutineReceiveIncoming(
 				}
 				copy(bufsArrs[i][:], opened)
 				packet = bufsArrs[i][:len(opened)]
+			} else if size < MinMessageSize {
+				continue
 			}
-			// lx:end lx_obf
+			// lx:end pathology
 
 			cip, err := device.HeaderProtectionCipher(packet[:HeaderCipherNonceSize])
 			if err != nil {

@@ -97,56 +97,77 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("fwmark=%d", device.net.fwmark)
 		}
 
-		// lx:begin lx_obf
-		if device.lxObfEnabled() {
-			sendf("lx_obf=true")
-			device.lxObf.mu.RLock()
-			cfg := device.lxObf.cfg
-			hasKey := device.lxObf.hasKey
-			device.lxObf.mu.RUnlock()
+		// lx:begin pathology
+		if device.pathologyEnabled() {
+			sendf("pathology=true")
+			device.pathology.mu.RLock()
+			cfg := device.pathology.cfg
+			hasKey := device.pathology.hasKey
+			device.pathology.mu.RUnlock()
 			if hasKey {
-				sendf("lx_obf_key=set")
+				sendf("pathology_key=set")
 			}
 			if cfg.Persona != "" {
-				sendf("lx_obf_persona=%s", cfg.Persona)
+				sendf("pathology_persona=%s", cfg.Persona)
 			}
-			sendf("lx_obf_pad_budget=%d", cfg.PadBudget)
+			sendf("pathology_pad_budget=%d", cfg.PadBudget)
 			if cfg.Strategy != "" && cfg.Strategy != "auto" {
-				sendf("lx_obf_pad_strategy=%s", cfg.Strategy)
+				sendf("pathology_pad_strategy=%s", cfg.Strategy)
 			}
 			if cfg.IdlePersona != "" {
-				sendf("lx_obf_idle_persona=%s", cfg.IdlePersona)
+				sendf("pathology_idle_persona=%s", cfg.IdlePersona)
 			}
 			if cfg.StartCover > 0 {
-				sendf("lx_obf_start_cover=%d", cfg.StartCover)
+				sendf("pathology_start_cover=%d", cfg.StartCover)
 			}
 			if cfg.StartGapMin != 0 || cfg.StartGapMax != 0 {
 				if cfg.StartGapMin == cfg.StartGapMax {
-					sendf("lx_obf_start_gap_ms=%d", cfg.StartGapMin)
+					sendf("pathology_start_gap_ms=%d", cfg.StartGapMin)
 				} else {
-					sendf("lx_obf_start_gap_ms=%d-%d", cfg.StartGapMin, cfg.StartGapMax)
+					sendf("pathology_start_gap_ms=%d-%d", cfg.StartGapMin, cfg.StartGapMax)
 				}
 			}
 			if cfg.CoverEveryMs > 0 {
-				sendf("lx_obf_cover_interval_ms=%d", cfg.CoverEveryMs)
+				sendf("pathology_cover_interval_ms=%d", cfg.CoverEveryMs)
 			}
 			if cfg.LowEntropy {
-				sendf("lx_obf_low_entropy=true")
+				sendf("pathology_low_entropy=true")
 			}
-			if prof := formatLxObfPadProfile(cfg.PadProfile); prof != "" {
-				sendf("lx_obf_pad_profile=%s", prof)
+			if prof := formatPathologyPadProfile(cfg.PadProfile); prof != "" {
+				sendf("pathology_pad_profile=%s", prof)
 			}
-			if cfg.Frame != "" && cfg.Frame != lxObfFrameNone {
-				sendf("lx_obf_frame=%s", cfg.Frame)
+			if cfg.Frame != "" && cfg.Frame != pathologyFrameNone {
+				sendf("pathology_frame=%s", cfg.Frame)
 			}
 			if cfg.FrameDCIDLen > 0 {
-				sendf("lx_obf_frame_dcid_len=%d", cfg.FrameDCIDLen)
+				sendf("pathology_frame_dcid_len=%d", cfg.FrameDCIDLen)
 			}
 			if cfg.StartDecoy != "" && cfg.StartDecoy != "none" {
-				sendf("lx_obf_start_decoy=%s", cfg.StartDecoy)
+				sendf("pathology_start_decoy=%s", cfg.StartDecoy)
+			}
+			if cfg.Cipher != "" && cfg.Cipher != pathologyCipherAEAD {
+				sendf("pathology_cipher=%s", cfg.Cipher)
+			}
+			if cfg.Preset != "" && cfg.Preset != pathologyPresetCustom {
+				sendf("pathology_preset=%s", cfg.Preset)
+			}
+			if cfg.RotateSec != pathologyDefaultRotateSec {
+				sendf("pathology_rotate_sec=%d", cfg.RotateSec)
+			}
+			if cfg.Intensity != 0 && cfg.Intensity != pathologyDefaultIntensity {
+				sendf("pathology_intensity=%d", cfg.Intensity)
+			}
+			if cfg.Mode != "" {
+				sendf("pathology_mode=%s", cfg.Mode)
+			}
+			if cfg.Dialog != "" && cfg.Dialog != pathologyDialogAuto {
+				sendf("pathology_dialog=%s", cfg.Dialog)
+			}
+			if cfg.Auto {
+				sendf("pathology_auto=true")
 			}
 		}
-		// lx:end lx_obf
+		// lx:end pathology
 
 		if count := device.junk.count.Load(); count != 0 {
 			sendf("jc=%d", count)
@@ -398,126 +419,185 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.log.Verbosef("UAPI: Removing all peers")
 		device.RemoveAllPeers()
 
-	// lx:begin lx_obf
-	case "lx_obf":
-		on, err := parseLxObfUAPI(value)
+	// lx:begin pathology
+	case "pathology":
+		on, err := parsePathologyUAPI(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology: %w", err)
 		}
-		ipcDev.lxObfPresent = true
-		ipcDev.lxObfValue = on
+		ipcDev.pathologyPresent = true
+		ipcDev.pathologyValue = on
 
-	case "lx_obf_key":
-		key, err := parseLxObfKeyUAPI(value)
+	case "pathology_key":
+		key, err := parsePathologyKeyUAPI(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_key: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_key: %w", err)
 		}
-		ipcDev.lxObfKey = key
-		ipcDev.lxObfKeyPresent = true
+		ipcDev.pathologyKey = key
+		ipcDev.pathologyKeyPresent = true
 
-	case "lx_obf_persona":
-		persona, err := normalizeLxObfPersona(value)
+	case "pathology_persona":
+		persona, err := normalizePathologyPersona(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
-		ipcDev.lxObfPersona = persona
-		ipcDev.lxObfPersonaPresent = true
+		ipcDev.pathologyPersona = persona
+		ipcDev.pathologyPersonaPresent = true
 
-	case "lx_obf_pad_budget":
+	case "pathology_pad_budget":
 		n, err := strconv.ParseUint(value, 10, 8)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_pad_budget: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_pad_budget: %w", err)
 		}
-		ipcDev.lxObfPadBudget = int(n)
-		ipcDev.lxObfPadBudgetPresent = true
+		ipcDev.pathologyPadBudget = int(n)
+		ipcDev.pathologyPadBudgetPresent = true
 
-	case "lx_obf_pad_strategy":
-		s, err := normalizeLxObfStrategy(value)
+	case "pathology_pad_strategy":
+		s, err := normalizePathologyStrategy(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
-		ipcDev.lxObfStrategy = s
-		ipcDev.lxObfStrategyPresent = true
+		ipcDev.pathologyStrategy = s
+		ipcDev.pathologyStrategyPresent = true
 
-	case "lx_obf_idle_persona":
-		persona, err := normalizeLxObfPersona(value)
+	case "pathology_idle_persona":
+		persona, err := normalizePathologyPersona(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
-		ipcDev.lxObfIdlePersona = persona
-		ipcDev.lxObfIdlePersonaPresent = true
+		ipcDev.pathologyIdlePersona = persona
+		ipcDev.pathologyIdlePersonaPresent = true
 
-	case "lx_obf_pad_profile":
-		prof, err := parseLxObfPadProfile(value)
+	case "pathology_pad_profile":
+		prof, err := parsePathologyPadProfile(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_pad_profile: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_pad_profile: %w", err)
 		}
-		ipcDev.lxObfPadProfile = prof
-		ipcDev.lxObfPadProfilePresent = true
+		ipcDev.pathologyPadProfile = prof
+		ipcDev.pathologyPadProfilePresent = true
 
-	case "lx_obf_start_cover":
+	case "pathology_start_cover":
 		n, err := strconv.ParseUint(value, 10, 8)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_start_cover: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_start_cover: %w", err)
 		}
-		ipcDev.lxObfStartCover = int(n)
-		ipcDev.lxObfStartCoverPresent = true
+		ipcDev.pathologyStartCover = int(n)
+		ipcDev.pathologyStartCoverPresent = true
 
-	case "lx_obf_start_gap_ms":
-		min, max, err := parseLxObfGapMs(value)
+	case "pathology_start_gap_ms":
+		min, max, err := parsePathologyGapMs(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_start_gap_ms: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_start_gap_ms: %w", err)
 		}
-		ipcDev.lxObfStartGapMin = min
-		ipcDev.lxObfStartGapMax = max
-		ipcDev.lxObfStartGapPresent = true
+		ipcDev.pathologyStartGapMin = min
+		ipcDev.pathologyStartGapMax = max
+		ipcDev.pathologyStartGapPresent = true
 
-	case "lx_obf_cover_interval_ms":
+	case "pathology_cover_interval_ms":
 		n, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_cover_interval_ms: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_cover_interval_ms: %w", err)
 		}
-		ipcDev.lxObfCoverEveryMs = int(n)
-		ipcDev.lxObfCoverEveryPresent = true
+		ipcDev.pathologyCoverEveryMs = int(n)
+		ipcDev.pathologyCoverEveryPresent = true
 
-	case "lx_obf_low_entropy":
-		on, err := parseLxObfUAPI(value)
+	case "pathology_low_entropy":
+		on, err := parsePathologyUAPI(value)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_low_entropy: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_low_entropy: %w", err)
 		}
-		ipcDev.lxObfLowEntropy = on
-		ipcDev.lxObfLowEntropyPresent = true
+		ipcDev.pathologyLowEntropy = on
+		ipcDev.pathologyLowEntropyPresent = true
 
-	case "lx_obf_frame":
-		f, err := normalizeLxObfFrame(value)
+	case "pathology_frame":
+		f, err := normalizePathologyFrame(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
-		ipcDev.lxObfFrame = f
-		ipcDev.lxObfFramePresent = true
+		ipcDev.pathologyFrame = f
+		ipcDev.pathologyFramePresent = true
 
-	case "lx_obf_frame_dcid_len":
+	case "pathology_frame_dcid_len":
 		n, err := strconv.ParseUint(value, 10, 8)
 		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_frame_dcid_len: %w", err)
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_frame_dcid_len: %w", err)
 		}
 		if n > 20 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "lx_obf_frame_dcid_len must be 0..20")
+			return ipcErrorf(ipc.IpcErrorInvalid, "pathology_frame_dcid_len must be 0..20")
 		}
-		ipcDev.lxObfFrameDCIDLen = int(n)
-		ipcDev.lxObfFrameDCIDPresent = true
+		ipcDev.pathologyFrameDCIDLen = int(n)
+		ipcDev.pathologyFrameDCIDPresent = true
 
-	case "lx_obf_start_decoy":
-		dcy, err := normalizeLxObfStartDecoy(value)
+	case "pathology_start_decoy":
+		dcy, err := normalizePathologyStartDecoy(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
-		ipcDev.lxObfStartDecoy = dcy
-		ipcDev.lxObfStartDecoyPresent = true
-	// lx:end lx_obf
+		ipcDev.pathologyStartDecoy = dcy
+		ipcDev.pathologyStartDecoyPresent = true
+
+	case "pathology_cipher":
+		ciph, err := normalizePathologyCipher(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.pathologyCipher = ciph
+		ipcDev.pathologyCipherPresent = true
+
+	case "pathology_preset":
+		pre, err := normalizePathologyPreset(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.pathologyPreset = pre
+		ipcDev.pathologyPresetPresent = true
+
+	case "pathology_rotate_sec":
+		n, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_rotate_sec: %w", err)
+		}
+		ipcDev.pathologyRotateSec = int(n)
+		ipcDev.pathologyRotateSecPresent = true
+
+	case "pathology_intensity":
+		n, err := strconv.ParseUint(value, 10, 8)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_intensity: %w", err)
+		}
+		if n < 1 || n > 5 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "pathology_intensity must be 1..5")
+		}
+		ipcDev.pathologyIntensity = int(n)
+		ipcDev.pathologyIntensityPresent = true
+
+	case "pathology_mode":
+		mode, err := normalizePathologyMode(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.pathologyMode = mode
+		ipcDev.pathologyModePresent = true
+
+	case "pathology_dialog":
+		d, err := normalizePathologyDialog(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.pathologyDialog = d
+		ipcDev.pathologyDialogPresent = true
+
+	case "pathology_auto":
+		on, err := parsePathologyUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_auto: %w", err)
+		}
+		ipcDev.pathologyAuto = on
+		ipcDev.pathologyAutoPresent = true
+	// lx:end pathology
 
 	case "jc":
-		if err := device.errIfLxObfBlocksAWG("jc"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("jc"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		jc, err := strconv.ParseUint(value, 10, 32)
@@ -529,7 +609,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.junk.count.Store(uint32(jc))
 
 	case "jmin":
-		if err := device.errIfLxObfBlocksAWG("jmin"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("jmin"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		jmin, err := strconv.ParseUint(value, 10, 32)
@@ -541,7 +621,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.junk.min.Store(uint32(jmin))
 
 	case "jmax":
-		if err := device.errIfLxObfBlocksAWG("jmax"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("jmax"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		jmax, err := strconv.ParseUint(value, 10, 32)
@@ -553,7 +633,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.junk.max.Store(uint32(jmax))
 
 	case "s1":
-		if err := device.errIfLxObfBlocksAWG("s1"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("s1"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		padding, err := strconv.ParseUint(value, 10, 16)
@@ -563,7 +643,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.paddings.init = uint32(padding)
 
 	case "s2":
-		if err := device.errIfLxObfBlocksAWG("s2"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("s2"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		padding, err := strconv.ParseUint(value, 10, 16)
@@ -573,7 +653,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.paddings.response = uint32(padding)
 
 	case "s3":
-		if err := device.errIfLxObfBlocksAWG("s3"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("s3"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		padding, err := strconv.ParseUint(value, 10, 16)
@@ -583,7 +663,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.paddings.cookie = uint32(padding)
 
 	case "s4":
-		if err := device.errIfLxObfBlocksAWG("s4"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("s4"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		padding, err := strconv.ParseUint(value, 10, 16)
@@ -621,7 +701,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.headers.transport = rang
 
 	case "i1":
-		if err := device.errIfLxObfBlocksAWG("i1"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("i1"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		chain, err := newObfChain(value)
@@ -631,7 +711,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[0] = chain
 
 	case "i2":
-		if err := device.errIfLxObfBlocksAWG("i2"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("i2"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		chain, err := newObfChain(value)
@@ -641,7 +721,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[1] = chain
 
 	case "i3":
-		if err := device.errIfLxObfBlocksAWG("i3"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("i3"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		chain, err := newObfChain(value)
@@ -651,7 +731,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[2] = chain
 
 	case "i4":
-		if err := device.errIfLxObfBlocksAWG("i4"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("i4"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		chain, err := newObfChain(value)
@@ -661,7 +741,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[3] = chain
 
 	case "i5":
-		if err := device.errIfLxObfBlocksAWG("i5"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("i5"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		chain, err := newObfChain(value)
@@ -671,7 +751,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[4] = chain
 
 	case "header_protection_key":
-		if err := device.errIfLxObfBlocksAWG("header_protection_key"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("header_protection_key"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		var key HeaderCipherKey
@@ -682,7 +762,7 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.headerProtectionKey = key
 
 	case "content_padding_addition":
-		if err := device.errIfLxObfBlocksAWG("content_padding_addition"); err != nil {
+		if err := device.errIfPathologyBlocksAWG("content_padding_addition"); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
 		}
 		var rang UintRange
@@ -1028,37 +1108,51 @@ type ipcSetDevice struct {
 		transport uint32
 	}
 	headerProtectionKey HeaderCipherKey
-	// lx:begin lx_obf
-	lxObfPresent             bool
-	lxObfValue               bool
-	lxObfKeyPresent          bool
-	lxObfKey                 []byte
-	lxObfPersonaPresent      bool
-	lxObfPersona             string
-	lxObfPadBudgetPresent    bool
-	lxObfPadBudget           int
-	lxObfStrategyPresent     bool
-	lxObfStrategy            string
-	lxObfIdlePersonaPresent  bool
-	lxObfIdlePersona         string
-	lxObfPadProfilePresent   bool
-	lxObfPadProfile          []lxObfPadMode
-	lxObfStartCoverPresent   bool
-	lxObfStartCover          int
-	lxObfStartGapPresent     bool
-	lxObfStartGapMin         int
-	lxObfStartGapMax         int
-	lxObfCoverEveryPresent   bool
-	lxObfCoverEveryMs        int
-	lxObfLowEntropyPresent   bool
-	lxObfLowEntropy          bool
-	lxObfFramePresent        bool
-	lxObfFrame               string
-	lxObfFrameDCIDPresent    bool
-	lxObfFrameDCIDLen        int
-	lxObfStartDecoyPresent   bool
-	lxObfStartDecoy          string
-	// lx:end lx_obf
+	// lx:begin pathology
+	pathologyPresent             bool
+	pathologyValue               bool
+	pathologyKeyPresent          bool
+	pathologyKey                 []byte
+	pathologyPersonaPresent      bool
+	pathologyPersona             string
+	pathologyPadBudgetPresent    bool
+	pathologyPadBudget           int
+	pathologyStrategyPresent     bool
+	pathologyStrategy            string
+	pathologyIdlePersonaPresent  bool
+	pathologyIdlePersona         string
+	pathologyPadProfilePresent   bool
+	pathologyPadProfile          []pathologyPadMode
+	pathologyStartCoverPresent   bool
+	pathologyStartCover          int
+	pathologyStartGapPresent     bool
+	pathologyStartGapMin         int
+	pathologyStartGapMax         int
+	pathologyCoverEveryPresent   bool
+	pathologyCoverEveryMs        int
+	pathologyLowEntropyPresent   bool
+	pathologyLowEntropy          bool
+	pathologyFramePresent        bool
+	pathologyFrame               string
+	pathologyFrameDCIDPresent    bool
+	pathologyFrameDCIDLen        int
+	pathologyStartDecoyPresent   bool
+	pathologyStartDecoy          string
+	pathologyCipherPresent       bool
+	pathologyCipher              string
+	pathologyPresetPresent       bool
+	pathologyPreset              string
+	pathologyRotateSecPresent    bool
+	pathologyRotateSec           int
+	pathologyIntensityPresent    bool
+	pathologyIntensity           int
+	pathologyModePresent         bool
+	pathologyMode                string
+	pathologyDialogPresent       bool
+	pathologyDialog              string
+	pathologyAutoPresent         bool
+	pathologyAuto                bool
+	// lx:end pathology
 }
 
 func (d *ipcSetDevice) fromDevice(device *Device) {
@@ -1080,7 +1174,7 @@ func (d *ipcSetDevice) fromDevice(device *Device) {
 
 func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.headerProtection.Lock()
-	// unlocked explicitly before lx_obf apply (not deferred) — see below
+	// unlocked explicitly before pathology apply (not deferred) — see below
 
 	headers := []UintRange{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
 	for i := 0; i < len(headers); i++ {
@@ -1095,16 +1189,16 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 		}
 	}
 
-	// lx:begin lx_obf
-	wantLxObf := device.lxObfEnabled()
-	if d.lxObfPresent {
-		wantLxObf = d.lxObfValue
+	// lx:begin pathology
+	wantPathology := device.pathologyEnabled()
+	if d.pathologyPresent {
+		wantPathology = d.pathologyValue
 	}
-	if wantLxObf && d.pendingPaddingOrHP() {
+	if wantPathology && d.pendingPaddingOrHP() {
 		device.headerProtection.Unlock()
-		return errors.New("lx_obf cannot be combined with AmneziaWG padding (s1–s4) or header_protection_key")
+		return errors.New("pathology cannot be combined with AmneziaWG padding (s1–s4) or header_protection_key")
 	}
-	// lx:end lx_obf
+	// lx:end pathology
 
 	device.log.Verbosef("UAPI: Updating h1")
 	device.headers.init.Store(d.headers.init)
@@ -1144,71 +1238,95 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.headerProtection.key = d.headerProtectionKey
 	device.headerProtection.Unlock()
 
-	// lx:begin lx_obf
-	// Applied after releasing headerProtection (awgKnobsConflictWithLxObf may RLock it).
-	if d.lxObfPresent {
-		if d.lxObfValue {
-			if err := device.awgKnobsConflictWithLxObf(); err != nil {
+	// lx:begin pathology
+	// Applied after releasing headerProtection (awgKnobsConflictWithPathology may RLock it).
+	if d.pathologyPresent {
+		if d.pathologyValue {
+			if err := device.awgKnobsConflictWithPathology(); err != nil {
 				return err
 			}
-			cfg := defaultLxObfRuntimeConfig()
-			if d.lxObfPersonaPresent {
-				cfg.Persona = d.lxObfPersona
+			cfg := defaultPathologyRuntimeConfig()
+			if d.pathologyPersonaPresent {
+				cfg.Persona = d.pathologyPersona
 			}
-			if d.lxObfPadBudgetPresent {
-				cfg.PadBudget = d.lxObfPadBudget
+			if d.pathologyPadBudgetPresent {
+				cfg.PadBudget = d.pathologyPadBudget
 			}
-			if d.lxObfStrategyPresent {
-				cfg.Strategy = d.lxObfStrategy
+			if d.pathologyStrategyPresent {
+				cfg.Strategy = d.pathologyStrategy
 			}
-			if d.lxObfIdlePersonaPresent {
-				cfg.IdlePersona = d.lxObfIdlePersona
+			if d.pathologyIdlePersonaPresent {
+				cfg.IdlePersona = d.pathologyIdlePersona
 			}
-			if d.lxObfPadProfilePresent {
-				cfg.PadProfile = d.lxObfPadProfile
+			if d.pathologyPadProfilePresent {
+				cfg.PadProfile = d.pathologyPadProfile
 			}
-			if d.lxObfStartCoverPresent {
-				cfg.StartCover = d.lxObfStartCover
+			if d.pathologyStartCoverPresent {
+				cfg.StartCover = d.pathologyStartCover
 			}
-			if d.lxObfStartGapPresent {
-				cfg.StartGapMin = d.lxObfStartGapMin
-				cfg.StartGapMax = d.lxObfStartGapMax
+			if d.pathologyStartGapPresent {
+				cfg.StartGapMin = d.pathologyStartGapMin
+				cfg.StartGapMax = d.pathologyStartGapMax
 			}
-			if d.lxObfCoverEveryPresent {
-				cfg.CoverEveryMs = d.lxObfCoverEveryMs
+			if d.pathologyCoverEveryPresent {
+				cfg.CoverEveryMs = d.pathologyCoverEveryMs
 			}
-			if d.lxObfLowEntropyPresent {
-				cfg.LowEntropy = d.lxObfLowEntropy
+			if d.pathologyLowEntropyPresent {
+				cfg.LowEntropy = d.pathologyLowEntropy
 			}
-			if d.lxObfFramePresent {
-				cfg.Frame = d.lxObfFrame
+			if d.pathologyFramePresent {
+				cfg.Frame = d.pathologyFrame
 			}
-			if d.lxObfFrameDCIDPresent {
-				cfg.FrameDCIDLen = d.lxObfFrameDCIDLen
+			if d.pathologyFrameDCIDPresent {
+				cfg.FrameDCIDLen = d.pathologyFrameDCIDLen
 			}
-			if d.lxObfStartDecoyPresent {
-				cfg.StartDecoy = d.lxObfStartDecoy
+			if d.pathologyStartDecoyPresent {
+				cfg.StartDecoy = d.pathologyStartDecoy
+			}
+			if d.pathologyCipherPresent {
+				cfg.Cipher = d.pathologyCipher
+			}
+			if d.pathologyPresetPresent {
+				cfg.Preset = d.pathologyPreset
+			}
+			if d.pathologyRotateSecPresent {
+				cfg.RotateSec = d.pathologyRotateSec
+			}
+			if d.pathologyIntensityPresent {
+				cfg.Intensity = d.pathologyIntensity
+			}
+			if d.pathologyModePresent {
+				cfg.Mode = d.pathologyMode
+			}
+			if d.pathologyDialogPresent {
+				cfg.Dialog = d.pathologyDialog
+			}
+			if d.pathologyAutoPresent {
+				cfg.Auto = d.pathologyAuto
 			}
 			var key []byte
-			if d.lxObfKeyPresent {
-				key = d.lxObfKey
+			if d.pathologyKeyPresent {
+				key = d.pathologyKey
 			}
-			m, err := newLxObfMorpherFromConfig(key, cfg)
+			m, err := newPathologyMorpherFromConfig(key, cfg)
 			if err != nil {
 				return err
 			}
-			device.setLxObfMorpherConfig(m, cfg, len(key) > 0)
+			if env, ok := m.(*envelopePathology); ok {
+				cfg = env.cfg // resolved preset/cipher/frame
+			}
+			device.setPathologyMorpherConfig(m, cfg, len(key) > 0)
 			if len(key) > 0 {
-				device.log.Verbosef("UAPI: lx_obf enabled (envelope persona=%s frame=%s start_decoy=%s)", cfg.Persona, cfg.Frame, cfg.StartDecoy)
+				device.log.Verbosef("UAPI: pathology enabled (envelope persona=%s cipher=%s frame=%s dialog=%s auto=%v intensity=%d rotate_sec=%d)", cfg.Persona, cfg.Cipher, cfg.Frame, cfg.Dialog, cfg.Auto, cfg.Intensity, cfg.RotateSec)
 			} else {
-				device.log.Verbosef("UAPI: lx_obf enabled (identity morpher)")
+				device.log.Verbosef("UAPI: pathology enabled (identity morpher)")
 			}
 		} else {
-			device.setLxObfMorpherConfig(nil, lxObfRuntimeConfig{}, false)
-			device.log.Verbosef("UAPI: lx_obf disabled")
+			device.setPathologyMorpherConfig(nil, pathologyRuntimeConfig{}, false)
+			device.log.Verbosef("UAPI: pathology disabled")
 		}
 	}
-	// lx:end lx_obf
+	// lx:end pathology
 
 	return nil
 }

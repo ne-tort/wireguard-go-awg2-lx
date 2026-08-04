@@ -142,17 +142,17 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 
-	// lx:begin lx_obf
-	if peer.device.lxObfEnabled() {
+	// lx:begin pathology
+	if peer.device.pathologyEnabled() {
 		for i := range buffers {
-			out, err := peer.device.lxObfSeal(buffers[i])
+			out, err := peer.device.pathologySeal(buffers[i])
 			if err != nil {
 				return err
 			}
 			buffers[i] = out
 		}
 	}
-	// lx:end lx_obf
+	// lx:end pathology
 
 	err := peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
 	if err == nil {

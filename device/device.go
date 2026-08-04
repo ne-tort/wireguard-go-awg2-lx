@@ -135,10 +135,10 @@ type Device struct {
 		maxHandshakeAttemps AtomicUintRange
 	}
 
-	// lx:begin lx_obf
+	// lx:begin pathology
 	// SPEC 059 — outer morpher (parallel to AmneziaWG; mutually exclusive).
-	lxObf lxObfState
-	// lx:end lx_obf
+	pathology pathologyState
+	// lx:end pathology
 
 	// lx: SPEC 041F — passive self-heal state (giveup / early / nudge).
 	// Mechanism lives in lx_giveup_rebind.go. Enabled by default; sing-box

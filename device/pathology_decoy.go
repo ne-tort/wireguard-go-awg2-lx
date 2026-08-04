@@ -12,19 +12,19 @@
 package device
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 )
 
 const (
-	lxObfQUICInitialMin = 1200
-	lxObfQUICInitialLen = 1250
+	pathologyQUICInitialMin = 1200
+	pathologyQUICInitialLen = 1250
 )
 
-// buildLxObfQUICInitialDecoy returns a ≥1200-byte UDP datagram shaped like a
-// QUIC v1 Initial long header. Payload after the header is CSPRNG (looks encrypted).
-func buildLxObfQUICInitialDecoy() ([]byte, error) {
-	out := make([]byte, lxObfQUICInitialLen)
+// buildPathologyQUICInitialDecoy returns a ≥1200-byte UDP datagram shaped like a
+// QUIC v1 Initial long header. When seed is set (T-EPOCH), CIDs and payload
+// are derived from it — no crypto/rand on the hot start path.
+func buildPathologyQUICInitialDecoy(seed []byte) ([]byte, error) {
+	out := make([]byte, pathologyQUICInitialLen)
 	// Long header (RFC 9000 §17.2): Header Form=1, Fixed=1, Type=Initial(00),
 	// Reserved=00, Packet Number Length = 1 byte → first byte 0xC0.
 	out[0] = 0xc0
@@ -34,15 +34,11 @@ func buildLxObfQUICInitialDecoy() ([]byte, error) {
 	scidLen := 4
 	out[5] = byte(dcidLen)
 	off := 6
-	if _, err := rand.Read(out[off : off+dcidLen]); err != nil {
-		return nil, err
-	}
+	fillFromSeedOrZero(out[off:off+dcidLen], seed, 0x01)
 	off += dcidLen
 	out[off] = byte(scidLen)
 	off++
-	if _, err := rand.Read(out[off : off+scidLen]); err != nil {
-		return nil, err
-	}
+	fillFromSeedOrZero(out[off:off+scidLen], seed, 0x02)
 	off += scidLen
 
 	// Token length = 0 (1-byte varint)
@@ -51,24 +47,32 @@ func buildLxObfQUICInitialDecoy() ([]byte, error) {
 
 	remain := len(out) - (off + 2)
 	if remain < 64 {
-		return nil, errLxObfShort
+		return nil, errPathologyShort
 	}
 	v := uint16(remain)
 	out[off] = byte(v>>8) | 0x40
 	out[off+1] = byte(v)
 	off += 2
 
-	if _, err := rand.Read(out[off:]); err != nil {
-		return nil, err
-	}
-	if len(out) < lxObfQUICInitialMin {
-		return nil, errLxObfShort
+	fillFromSeedOrZero(out[off:], seed, 0x03)
+	if len(out) < pathologyQUICInitialMin {
+		return nil, errPathologyShort
 	}
 	return out, nil
 }
 
-func isLxObfLikelyQUICInitial(packet []byte) bool {
-	if len(packet) < lxObfQUICInitialMin {
+func fillFromSeedOrZero(dst, seed []byte, salt byte) {
+	if len(dst) == 0 {
+		return
+	}
+	if len(seed) == 0 {
+		seed = make([]byte, 32)
+	}
+	pathologyStreamFill(dst, seed, salt, 0)
+}
+
+func isPathologyLikelyQUICInitial(packet []byte) bool {
+	if len(packet) < pathologyQUICInitialMin {
 		return false
 	}
 	if packet[0]&0x80 == 0 || packet[0]&0x40 == 0 {
