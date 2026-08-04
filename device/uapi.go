@@ -136,6 +136,15 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			if prof := formatLxObfPadProfile(cfg.PadProfile); prof != "" {
 				sendf("lx_obf_pad_profile=%s", prof)
 			}
+			if cfg.Frame != "" && cfg.Frame != lxObfFrameNone {
+				sendf("lx_obf_frame=%s", cfg.Frame)
+			}
+			if cfg.FrameDCIDLen > 0 {
+				sendf("lx_obf_frame_dcid_len=%d", cfg.FrameDCIDLen)
+			}
+			if cfg.StartDecoy != "" && cfg.StartDecoy != "none" {
+				sendf("lx_obf_start_decoy=%s", cfg.StartDecoy)
+			}
 		}
 		// lx:end lx_obf
 
@@ -478,6 +487,33 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		}
 		ipcDev.lxObfLowEntropy = on
 		ipcDev.lxObfLowEntropyPresent = true
+
+	case "lx_obf_frame":
+		f, err := normalizeLxObfFrame(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.lxObfFrame = f
+		ipcDev.lxObfFramePresent = true
+
+	case "lx_obf_frame_dcid_len":
+		n, err := strconv.ParseUint(value, 10, 8)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_frame_dcid_len: %w", err)
+		}
+		if n > 20 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "lx_obf_frame_dcid_len must be 0..20")
+		}
+		ipcDev.lxObfFrameDCIDLen = int(n)
+		ipcDev.lxObfFrameDCIDPresent = true
+
+	case "lx_obf_start_decoy":
+		dcy, err := normalizeLxObfStartDecoy(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.lxObfStartDecoy = dcy
+		ipcDev.lxObfStartDecoyPresent = true
 	// lx:end lx_obf
 
 	case "jc":
@@ -1016,6 +1052,12 @@ type ipcSetDevice struct {
 	lxObfCoverEveryMs        int
 	lxObfLowEntropyPresent   bool
 	lxObfLowEntropy          bool
+	lxObfFramePresent        bool
+	lxObfFrame               string
+	lxObfFrameDCIDPresent    bool
+	lxObfFrameDCIDLen        int
+	lxObfStartDecoyPresent   bool
+	lxObfStartDecoy          string
 	// lx:end lx_obf
 }
 
@@ -1138,6 +1180,15 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 			if d.lxObfLowEntropyPresent {
 				cfg.LowEntropy = d.lxObfLowEntropy
 			}
+			if d.lxObfFramePresent {
+				cfg.Frame = d.lxObfFrame
+			}
+			if d.lxObfFrameDCIDPresent {
+				cfg.FrameDCIDLen = d.lxObfFrameDCIDLen
+			}
+			if d.lxObfStartDecoyPresent {
+				cfg.StartDecoy = d.lxObfStartDecoy
+			}
 			var key []byte
 			if d.lxObfKeyPresent {
 				key = d.lxObfKey
@@ -1148,7 +1199,7 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 			}
 			device.setLxObfMorpherConfig(m, cfg, len(key) > 0)
 			if len(key) > 0 {
-				device.log.Verbosef("UAPI: lx_obf enabled (envelope persona=%s pad_budget=%d start_cover=%d)", cfg.Persona, cfg.PadBudget, cfg.StartCover)
+				device.log.Verbosef("UAPI: lx_obf enabled (envelope persona=%s frame=%s start_decoy=%s)", cfg.Persona, cfg.Frame, cfg.StartDecoy)
 			} else {
 				device.log.Verbosef("UAPI: lx_obf enabled (identity morpher)")
 			}

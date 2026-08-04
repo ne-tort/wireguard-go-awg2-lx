@@ -234,3 +234,122 @@ func TestEnvelopeSealThroughputSynthetic(t *testing.T) {
 		}
 	}
 }
+
+func TestFrameTLS13RoundTrip(t *testing.T) {
+	psk := []byte("frame-tls-key-material-xxxxxxxx")
+	cfg := testCfg("balanced", 48)
+	cfg.Frame = "tls13"
+	cli, err := newEnvelopeLxObf(psk, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := newEnvelopeLxObf(psk, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg := bytes.Repeat([]byte{5}, 92)
+	sealed, err := cli.Seal(wg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sealed[0] != 0x17 {
+		t.Fatalf("want TLS content type, got %#x", sealed[0])
+	}
+	for _, classic := range []int{32, 64, 92, 148} {
+		if len(sealed) == classic {
+			t.Fatalf("framed size collapsed to classic %d", classic)
+		}
+	}
+	opened, err := srv.Open(sealed)
+	if err != nil || !bytes.Equal(opened, wg) {
+		t.Fatal(err, len(opened))
+	}
+}
+
+func TestFrameQUICShortRoundTrip(t *testing.T) {
+	psk := []byte("frame-quic-key-material-xxxxxxx")
+	cfg := testCfg("quic-h3", 40)
+	cfg.Frame = "quic-short"
+	cfg.FrameDCIDLen = 8
+	m, err := newEnvelopeLxObf(psk, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg := bytes.Repeat([]byte{6}, 148)
+	sealed, err := m.Seal(wg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sealed[0]&0x40 == 0 || sealed[0]&0x80 != 0 {
+		t.Fatalf("bad quic-short first byte %#x", sealed[0])
+	}
+	opened, err := m.Open(sealed)
+	if err != nil || !bytes.Equal(opened, wg) {
+		t.Fatal(err)
+	}
+}
+
+func TestFrameDNSAndSTUNRoundTrip(t *testing.T) {
+	psk := []byte("frame-dns-stun-key-material-xxx")
+	for _, frame := range []string{"dns", "stun"} {
+		cfg := testCfg("dns-idle", 32)
+		cfg.Frame = frame
+		m, err := newEnvelopeLxObf(psk, cfg)
+		if err != nil {
+			t.Fatal(frame, err)
+		}
+		wg := bytes.Repeat([]byte{7}, 64)
+		sealed, err := m.Seal(wg)
+		if err != nil {
+			t.Fatal(frame, err)
+		}
+		opened, err := m.Open(sealed)
+		if err != nil || !bytes.Equal(opened, wg) {
+			t.Fatal(frame, err)
+		}
+	}
+}
+
+func TestQUICInitialDecoyShape(t *testing.T) {
+	pkt, err := buildLxObfQUICInitialDecoy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isLxObfLikelyQUICInitial(pkt) {
+		t.Fatal("not recognized as initial")
+	}
+	psk := []byte("decoy-open-key-material-xxxxxxx")
+	m, err := newEnvelopeLxObf(psk, testCfg("balanced", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Open(pkt)
+	if !errors.Is(err, errLxObfCover) {
+		t.Fatalf("want cover drop, got %v", err)
+	}
+}
+
+func TestFrameCrossPersonaCompat(t *testing.T) {
+	psk := []byte("cross-persona-frame-key-xxxxxxx")
+	cliCfg := testCfg("quic-h3", 64)
+	cliCfg.Frame = "tls13"
+	srvCfg := testCfg("webrtc", 80)
+	srvCfg.Frame = "tls13" // frame must match; persona may differ
+	cli, err := newEnvelopeLxObf(psk, cliCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := newEnvelopeLxObf(psk, srvCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg := bytes.Repeat([]byte{8}, 200)
+	sealed, err := cli.Seal(wg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := srv.Open(sealed)
+	if err != nil || !bytes.Equal(opened, wg) {
+		t.Fatal(err)
+	}
+}

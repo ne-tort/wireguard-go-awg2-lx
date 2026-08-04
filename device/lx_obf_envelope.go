@@ -78,6 +78,7 @@ type envelopeLxObf struct {
 	cfg      lxObfRuntimeConfig
 	strategy byte
 	replay   *lxObfReplayCache
+	frameKey []byte // HKDF key bytes for stable quic-short DCID
 }
 
 func newEnvelopeLxObf(psk []byte, cfg lxObfRuntimeConfig) (*envelopeLxObf, error) {
@@ -96,6 +97,17 @@ func newEnvelopeLxObf(psk []byte, cfg lxObfRuntimeConfig) (*envelopeLxObf, error
 	cfg.Strategy, err = normalizeLxObfStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
+	}
+	cfg.Frame, err = normalizeLxObfFrame(cfg.Frame)
+	if err != nil {
+		return nil, err
+	}
+	cfg.StartDecoy, err = normalizeLxObfStartDecoy(cfg.StartDecoy)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.FrameDCIDLen < 0 || cfg.FrameDCIDLen > 20 {
+		return nil, fmt.Errorf("lx_obf frame_dcid_len must be 0..20")
 	}
 	if cfg.PadBudget < 0 {
 		return nil, fmt.Errorf("lx_obf pad_budget negative")
@@ -125,6 +137,7 @@ func newEnvelopeLxObf(psk []byte, cfg lxObfRuntimeConfig) (*envelopeLxObf, error
 		cfg:      cfg,
 		strategy: strategyByte(cfg.Strategy, key[0]),
 		replay:   newLxObfReplayCache(),
+		frameKey: append([]byte(nil), key...),
 	}, nil
 }
 
@@ -139,7 +152,7 @@ func (e *envelopeLxObf) sealBlob(kind byte, data []byte, idle bool) ([]byte, err
 	if e.cfg.LowEntropy && padLen < 16 && e.cfg.PadBudget >= 16 {
 		padLen = 16
 	}
-	base := lxObfFixedOverhead + len(data)
+	base := lxObfFixedOverhead + len(data) + lxObfFrameOverhead(e.cfg.Frame, e.frameDCIDLen())
 	padLen = avoidClassicWGSize(base, padLen)
 
 	plaintext := make([]byte, lxObfMetaSize+len(data))
@@ -171,7 +184,7 @@ func (e *envelopeLxObf) sealBlob(kind byte, data []byte, idle bool) ([]byte, err
 		st = lxObfEntropyASCII
 	}
 	fillLxObfPad(pad, out[ctStart:ctStart+len(ct)], st)
-	return out, nil
+	return e.frameWrap(out)
 }
 
 func (e *envelopeLxObf) Seal(wg []byte) ([]byte, error) {
@@ -194,7 +207,13 @@ func (e *envelopeLxObf) SealCover() ([]byte, error) {
 	return e.sealBlob(lxObfKindCover, data, true)
 }
 
-func (e *envelopeLxObf) StartCoverCount() int { return e.cfg.StartCover }
+func (e *envelopeLxObf) StartCoverCount() int {
+	n := e.cfg.StartCover
+	if n == 0 && e.cfg.StartDecoy == "quic-initial" {
+		return 1 // at least one L4 Initial decoy when requested
+	}
+	return n
+}
 
 func (e *envelopeLxObf) StartGap() (min, max time.Duration) {
 	return time.Duration(e.cfg.StartGapMin) * time.Millisecond,
@@ -208,11 +227,24 @@ func (e *envelopeLxObf) CoverEvery() time.Duration {
 	return time.Duration(e.cfg.CoverEveryMs) * time.Millisecond
 }
 
+func (e *envelopeLxObf) StartDecoyMode() string { return e.cfg.StartDecoy }
+
 func (e *envelopeLxObf) Open(packet []byte) ([]byte, error) {
+	inner, err := e.frameUnwrap(packet)
+	if err != nil {
+		if isLxObfLikelyQUICInitial(packet) {
+			return nil, errLxObfCover // T-START Initial decoy — silent
+		}
+		return nil, err
+	}
+	packet = inner
 	if len(packet) < lxObfFixedOverhead {
 		return nil, errLxObfShort
 	}
 	if packet[0] != lxObfVersion {
+		if isLxObfLikelyQUICInitial(packet) {
+			return nil, errLxObfCover
+		}
 		return nil, errLxObfVersion
 	}
 	padLen := int(packet[1])
@@ -254,9 +286,6 @@ func (e *envelopeLxObf) Open(packet []byte) ([]byte, error) {
 func newLxObfMorpherFromConfig(key []byte, cfg lxObfRuntimeConfig) (LxObfMorpher, error) {
 	if len(key) == 0 {
 		return newIdentityLxObf(), nil
-	}
-	if cfg.PadBudget == 0 && cfg.Persona != "" && len(cfg.PadProfile) == 0 && !cfg.LowEntropy {
-		// allow explicit 0
 	}
 	return newEnvelopeLxObf(key, cfg)
 }

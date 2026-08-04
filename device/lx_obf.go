@@ -27,6 +27,7 @@ type lxObfCoverMorpher interface {
 	StartCoverCount() int
 	StartGap() (min, max time.Duration)
 	CoverEvery() time.Duration
+	StartDecoyMode() string
 }
 
 type lxObfState struct {
@@ -89,8 +90,17 @@ func (device *Device) lxObfBuildStartCovers() [][]byte {
 		return nil
 	}
 	out := make([][]byte, 0, n)
+	decoy := c.StartDecoyMode() == "quic-initial"
 	for i := 0; i < n; i++ {
-		pkt, err := c.SealCover()
+		var pkt []byte
+		var err error
+		// First packet(s): structural QUIC Initial when start_decoy requested
+		// (AWG study: Initial beats short-header for first-packet DPI).
+		if decoy && i == 0 {
+			pkt, err = buildLxObfQUICInitialDecoy()
+		} else {
+			pkt, err = c.SealCover()
+		}
 		if err != nil {
 			device.log.Verbosef("lx_obf: start cover seal failed: %v", err)
 			continue

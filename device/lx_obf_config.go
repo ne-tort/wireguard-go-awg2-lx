@@ -26,6 +26,9 @@ type lxObfRuntimeConfig struct {
 	StartGapMax  int // ms
 	CoverEveryMs int // 0=off; extra cover around keepalives / idle
 	LowEntropy   bool
+	Frame        string // none|tls13|quic-short|dns|stun (L4 wrap; should match peers)
+	FrameDCIDLen int    // 1..20 for quic-short; 0→8
+	StartDecoy   string // none|quic-initial
 }
 
 func defaultLxObfRuntimeConfig() lxObfRuntimeConfig {
@@ -36,6 +39,8 @@ func defaultLxObfRuntimeConfig() lxObfRuntimeConfig {
 		Strategy:    "auto",
 		StartGapMin: 0,
 		StartGapMax: 20,
+		Frame:       lxObfFrameNone,
+		StartDecoy:  "none",
 	}
 }
 
