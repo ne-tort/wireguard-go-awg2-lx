@@ -25,11 +25,10 @@ const (
 // QUIC v1 Initial long header. Payload after the header is CSPRNG (looks encrypted).
 func buildLxObfQUICInitialDecoy() ([]byte, error) {
 	out := make([]byte, lxObfQUICInitialLen)
-	// Long header: form bit 1, fixed bit 1, type=Initial (0b00<<4 for v1) → 0xC0..
-	var rb [1]byte
-	_, _ = rand.Read(rb[:])
-	out[0] = 0xc0 | (rb[0] & 0x0f) // pn length bits in low 2; reserved/random in others
-	binary.BigEndian.PutUint32(out[1:5], 0x00000001) // Version Negotiation / v1
+	// Long header (RFC 9000 §17.2): Header Form=1, Fixed=1, Type=Initial(00),
+	// Reserved=00, Packet Number Length = 1 byte → first byte 0xC0.
+	out[0] = 0xc0
+	binary.BigEndian.PutUint32(out[1:5], 0x00000001)
 
 	dcidLen := 8
 	scidLen := 4
@@ -50,18 +49,15 @@ func buildLxObfQUICInitialDecoy() ([]byte, error) {
 	out[off] = 0
 	off++
 
-	// Length varint (2-byte form): remaining after this field = PN + payload.
 	remain := len(out) - (off + 2)
 	if remain < 64 {
 		return nil, errLxObfShort
 	}
-	// 14-bit varint with 01 prefix
 	v := uint16(remain)
 	out[off] = byte(v>>8) | 0x40
 	out[off+1] = byte(v)
 	off += 2
 
-	// 1-byte packet number + encrypted-looking payload
 	if _, err := rand.Read(out[off:]); err != nil {
 		return nil, err
 	}
@@ -76,6 +72,10 @@ func isLxObfLikelyQUICInitial(packet []byte) bool {
 		return false
 	}
 	if packet[0]&0x80 == 0 || packet[0]&0x40 == 0 {
+		return false
+	}
+	// Type bits 4-5 must be Initial (00) for v1.
+	if (packet[0]>>4)&0x03 != 0 {
 		return false
 	}
 	ver := binary.BigEndian.Uint32(packet[1:5])

@@ -353,3 +353,97 @@ func TestFrameCrossPersonaCompat(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAsymmetricFramesHubInterop(t *testing.T) {
+	// Hub peer_relay reality: one device key, Seal frames may differ per endpoint.
+	psk := []byte("hub-asymmetric-frame-key-xxxxx")
+	mk := func(frame, persona string, pad int) *envelopeLxObf {
+		cfg := testCfg(persona, pad)
+		cfg.Frame = frame
+		m, err := newEnvelopeLxObf(psk, cfg)
+		if err != nil {
+			t.Fatal(frame, err)
+		}
+		return m
+	}
+	a := mk("tls13", "quic-h3", 48)
+	hub := mk("quic-short", "balanced", 64)
+	b := mk("dns", "webrtc", 40)
+
+	wg := bytes.Repeat([]byte{9}, 300)
+	// A → hub
+	sa, err := a.Seal(wg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oa, err := hub.Open(sa)
+	if err != nil || !bytes.Equal(oa, wg) {
+		t.Fatal("A→hub", err)
+	}
+	// hub → A
+	sh, err := hub.Seal(wg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oh, err := a.Open(sh)
+	if err != nil || !bytes.Equal(oh, wg) {
+		t.Fatal("hub→A", err)
+	}
+	// B → hub → B
+	sb, err := b.Seal(wg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ob, err := hub.Open(sb)
+	if err != nil || !bytes.Equal(ob, wg) {
+		t.Fatal("B→hub", err)
+	}
+	ob2, err := b.Open(sh) // hub sealed with quic-short
+	if err != nil || !bytes.Equal(ob2, wg) {
+		t.Fatal("hub→B", err)
+	}
+}
+
+func TestOverheadBoundsAndCachedDCID(t *testing.T) {
+	psk := []byte("overhead-bounds-key-material-xx")
+	cfg := testCfg("balanced", 64)
+	cfg.Frame = "quic-short"
+	cfg.FrameDCIDLen = 8
+	m, err := newEnvelopeLxObf(psk, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.dcid) != 8 {
+		t.Fatalf("dcid not cached: %d", len(m.dcid))
+	}
+	d1 := m.frameDCID()
+	d2 := m.frameDCID()
+	if &d1[0] != &d2[0] {
+		t.Fatal("dcid should be cached slice")
+	}
+	wg := bytes.Repeat([]byte{1}, 1000)
+	const N = 200
+	var sum int
+	minOH, maxOH := 1<<30, 0
+	frameOH := lxObfFrameOverhead("quic-short", 8)
+	for i := 0; i < N; i++ {
+		sealed, err := m.Seal(wg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oh := len(sealed) - len(wg)
+		sum += oh
+		if oh < minOH {
+			minOH = oh
+		}
+		if oh > maxOH {
+			maxOH = oh
+		}
+		// Fixed envelope 33 + frame + pad≤64 (+1 avoid classic)
+		if oh < 33+frameOH || oh > 33+frameOH+65 {
+			t.Fatalf("overhead %d out of bounds", oh)
+		}
+	}
+	avg := float64(sum) / float64(N)
+	t.Logf("quic-short overhead avg=%.1f min=%d max=%d (wg=%d)", avg, minOH, maxOH, len(wg))
+}

@@ -79,6 +79,7 @@ type envelopeLxObf struct {
 	strategy byte
 	replay   *lxObfReplayCache
 	frameKey []byte // HKDF key bytes for stable quic-short DCID
+	dcid     []byte // cached quic-short DCID (nil unless frame=quic-short)
 }
 
 func newEnvelopeLxObf(psk []byte, cfg lxObfRuntimeConfig) (*envelopeLxObf, error) {
@@ -132,13 +133,17 @@ func newEnvelopeLxObf(psk []byte, cfg lxObfRuntimeConfig) (*envelopeLxObf, error
 	if err != nil {
 		return nil, err
 	}
-	return &envelopeLxObf{
+	e := &envelopeLxObf{
 		aead:     aead,
 		cfg:      cfg,
 		strategy: strategyByte(cfg.Strategy, key[0]),
 		replay:   newLxObfReplayCache(),
 		frameKey: append([]byte(nil), key...),
-	}, nil
+	}
+	if cfg.Frame == lxObfFrameQUICShort {
+		e.dcid = e.makeFrameDCID()
+	}
+	return e, nil
 }
 
 func (e *envelopeLxObf) sealBlob(kind byte, data []byte, idle bool) ([]byte, error) {

@@ -107,12 +107,12 @@ func (e *envelopeLxObf) frameWrap(envelope []byte) ([]byte, error) {
 }
 
 func (e *envelopeLxObf) frameUnwrap(packet []byte) ([]byte, error) {
-	// Prefer configured frame, then autodetection of known structural prefixes.
+	// Prefer configured frame. On miss, autodetect (asymmetric Seal frames on hub↔peers).
 	if unwrapped, ok := tryUnwrapConfigured(packet, e.cfg.Frame, e.frameDCIDLen()); ok {
 		return unwrapped, nil
 	}
-	if e.cfg.Frame != lxObfFrameNone && e.cfg.Frame != "" {
-		// Configured frame failed — still try others / raw (compat during rollout).
+	if e.cfg.Frame == lxObfFrameNone || e.cfg.Frame == "" {
+		// Raw path already tried in tryUnwrapConfigured; still probe foreign frames.
 	}
 	if body, ok := tryUnwrapTLS13(packet); ok {
 		return body, nil
@@ -120,13 +120,12 @@ func (e *envelopeLxObf) frameUnwrap(packet []byte) ([]byte, error) {
 	if body, ok := tryUnwrapQUICShort(packet, e.frameDCIDLen()); ok {
 		return body, nil
 	}
-	if body, ok := tryUnwrapDNS(packet); ok {
-		return body, nil
-	}
 	if body, ok := tryUnwrapSTUN(packet); ok {
 		return body, nil
 	}
-	// Raw envelope (ver=0x02).
+	if body, ok := tryUnwrapDNS(packet); ok {
+		return body, nil
+	}
 	if len(packet) > 0 && packet[0] == lxObfVersion {
 		return packet, nil
 	}
@@ -161,6 +160,13 @@ func (e *envelopeLxObf) frameDCIDLen() int {
 }
 
 func (e *envelopeLxObf) frameDCID() []byte {
+	if len(e.dcid) > 0 {
+		return e.dcid
+	}
+	return e.makeFrameDCID()
+}
+
+func (e *envelopeLxObf) makeFrameDCID() []byte {
 	n := e.frameDCIDLen()
 	if n > 20 {
 		n = 20
@@ -168,7 +174,6 @@ func (e *envelopeLxObf) frameDCID() []byte {
 	if n < 1 {
 		n = 8
 	}
-	// Stable per-session DCID from AEAD key material (first N key bytes via derive salt).
 	out := make([]byte, n)
 	key := e.aeadKeyHint()
 	copy(out, key)
@@ -180,7 +185,6 @@ func (e *envelopeLxObf) frameDCID() []byte {
 
 // aeadKeyHint returns up to 32 bytes derived for stable framing IDs.
 func (e *envelopeLxObf) aeadKeyHint() []byte {
-	// ChaCha20-Poly1305 key is not exported; use a dedicated field if set.
 	if len(e.frameKey) > 0 {
 		return e.frameKey
 	}
@@ -223,12 +227,10 @@ func wrapQUICShort(payload []byte, dcid []byte) ([]byte, error) {
 	if len(dcid) == 0 || len(dcid) > 20 {
 		return nil, fmt.Errorf("lx_obf quic-short: bad dcid len")
 	}
-	// Fixed bit must be 1; spin/key_phase randomized lightly; pn_len = 1.
-	var spin byte
-	_ = spin
+	// Fixed bit must be 1; spin/key_phase lightly randomized; pn_len = 1.
 	var b [1]byte
 	_, _ = rand.Read(b[:])
-	first := byte(0x40) | ((b[0] & 0x20)) | (b[0]&0x04) | 0x00 // pn_len-1 = 0 → 1 byte PN
+	first := byte(0x40) | (b[0] & 0x20) | (b[0] & 0x04)
 	out := make([]byte, 1+len(dcid)+1+len(payload))
 	out[0] = first
 	copy(out[1:], dcid)
@@ -264,7 +266,8 @@ func wrapDNSQuery(payload []byte) ([]byte, error) {
 	copy(out[0:2], id[:])
 	out[2] = 0x01 // RD
 	out[3] = 0x00
-	binary.BigEndian.PutUint16(out[4:6], 1) // QDCOUNT=1 (legend only; body is envelope)
+	binary.BigEndian.PutUint16(out[4:6], 1) // QDCOUNT=1 (legend; no real QNAME — envelope follows)
+	// ANCOUNT/NSCOUNT/ARCOUNT remain 0
 	copy(out[lxObfDNSHdrSize:], payload)
 	return out, nil
 }
@@ -273,8 +276,20 @@ func tryUnwrapDNS(packet []byte) ([]byte, bool) {
 	if len(packet) < lxObfDNSHdrSize+lxObfFixedOverhead {
 		return nil, false
 	}
-	// QR=0 query; not a response.
+	// Do not steal raw envelopes (ver=0x02 at offset 0).
+	if packet[0] == lxObfVersion {
+		return nil, false
+	}
+	// QR=0 query; QDCOUNT=1; AN/NS/AR = 0 (header-only legend).
 	if packet[2]&0x80 != 0 {
+		return nil, false
+	}
+	if binary.BigEndian.Uint16(packet[4:6]) != 1 {
+		return nil, false
+	}
+	if binary.BigEndian.Uint16(packet[6:8]) != 0 ||
+		binary.BigEndian.Uint16(packet[8:10]) != 0 ||
+		binary.BigEndian.Uint16(packet[10:12]) != 0 {
 		return nil, false
 	}
 	body := packet[lxObfDNSHdrSize:]
