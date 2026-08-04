@@ -140,6 +140,30 @@ func (device *Device) RoutineReceiveIncoming(
 			// check size of packet
 			packet := bufsArrs[i][:size]
 
+			// lx:begin lx_obf
+			if device.lxObfEnabled() {
+				opened, err := device.lxObfOpen(packet)
+				if err != nil {
+					if isLxObfCover(err) {
+						continue // T-START/T-IDLE cover — silent drop
+					}
+					device.log.Verbosef("lx_obf: open failed (%v), drop len=%d", err, len(packet))
+					continue // silence on demorph failure (TECHNIQUES T-PROBE)
+				}
+				if len(opened) < MinMessageSize {
+					device.log.Verbosef("lx_obf: demorphed packet too short len=%d", len(opened))
+					continue
+				}
+				// Copy back into the pooled message buffer so later stages that
+				// assume packet ⊆ bufsArrs[i] (decrypt dst, recycling) stay valid.
+				if len(opened) > len(bufsArrs[i]) {
+					continue
+				}
+				copy(bufsArrs[i][:], opened)
+				packet = bufsArrs[i][:len(opened)]
+			}
+			// lx:end lx_obf
+
 			cip, err := device.HeaderProtectionCipher(packet[:HeaderCipherNonceSize])
 			if err != nil {
 				device.log.Errorf("Failed to initialize header cipher")

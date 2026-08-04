@@ -97,6 +97,48 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("fwmark=%d", device.net.fwmark)
 		}
 
+		// lx:begin lx_obf
+		if device.lxObfEnabled() {
+			sendf("lx_obf=true")
+			device.lxObf.mu.RLock()
+			cfg := device.lxObf.cfg
+			hasKey := device.lxObf.hasKey
+			device.lxObf.mu.RUnlock()
+			if hasKey {
+				sendf("lx_obf_key=set")
+			}
+			if cfg.Persona != "" {
+				sendf("lx_obf_persona=%s", cfg.Persona)
+			}
+			sendf("lx_obf_pad_budget=%d", cfg.PadBudget)
+			if cfg.Strategy != "" && cfg.Strategy != "auto" {
+				sendf("lx_obf_pad_strategy=%s", cfg.Strategy)
+			}
+			if cfg.IdlePersona != "" {
+				sendf("lx_obf_idle_persona=%s", cfg.IdlePersona)
+			}
+			if cfg.StartCover > 0 {
+				sendf("lx_obf_start_cover=%d", cfg.StartCover)
+			}
+			if cfg.StartGapMin != 0 || cfg.StartGapMax != 0 {
+				if cfg.StartGapMin == cfg.StartGapMax {
+					sendf("lx_obf_start_gap_ms=%d", cfg.StartGapMin)
+				} else {
+					sendf("lx_obf_start_gap_ms=%d-%d", cfg.StartGapMin, cfg.StartGapMax)
+				}
+			}
+			if cfg.CoverEveryMs > 0 {
+				sendf("lx_obf_cover_interval_ms=%d", cfg.CoverEveryMs)
+			}
+			if cfg.LowEntropy {
+				sendf("lx_obf_low_entropy=true")
+			}
+			if prof := formatLxObfPadProfile(cfg.PadProfile); prof != "" {
+				sendf("lx_obf_pad_profile=%s", prof)
+			}
+		}
+		// lx:end lx_obf
+
 		if count := device.junk.count.Load(); count != 0 {
 			sendf("jc=%d", count)
 		}
@@ -347,7 +389,101 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.log.Verbosef("UAPI: Removing all peers")
 		device.RemoveAllPeers()
 
+	// lx:begin lx_obf
+	case "lx_obf":
+		on, err := parseLxObfUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf: %w", err)
+		}
+		ipcDev.lxObfPresent = true
+		ipcDev.lxObfValue = on
+
+	case "lx_obf_key":
+		key, err := parseLxObfKeyUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_key: %w", err)
+		}
+		ipcDev.lxObfKey = key
+		ipcDev.lxObfKeyPresent = true
+
+	case "lx_obf_persona":
+		persona, err := normalizeLxObfPersona(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.lxObfPersona = persona
+		ipcDev.lxObfPersonaPresent = true
+
+	case "lx_obf_pad_budget":
+		n, err := strconv.ParseUint(value, 10, 8)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_pad_budget: %w", err)
+		}
+		ipcDev.lxObfPadBudget = int(n)
+		ipcDev.lxObfPadBudgetPresent = true
+
+	case "lx_obf_pad_strategy":
+		s, err := normalizeLxObfStrategy(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.lxObfStrategy = s
+		ipcDev.lxObfStrategyPresent = true
+
+	case "lx_obf_idle_persona":
+		persona, err := normalizeLxObfPersona(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
+		ipcDev.lxObfIdlePersona = persona
+		ipcDev.lxObfIdlePersonaPresent = true
+
+	case "lx_obf_pad_profile":
+		prof, err := parseLxObfPadProfile(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_pad_profile: %w", err)
+		}
+		ipcDev.lxObfPadProfile = prof
+		ipcDev.lxObfPadProfilePresent = true
+
+	case "lx_obf_start_cover":
+		n, err := strconv.ParseUint(value, 10, 8)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_start_cover: %w", err)
+		}
+		ipcDev.lxObfStartCover = int(n)
+		ipcDev.lxObfStartCoverPresent = true
+
+	case "lx_obf_start_gap_ms":
+		min, max, err := parseLxObfGapMs(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_start_gap_ms: %w", err)
+		}
+		ipcDev.lxObfStartGapMin = min
+		ipcDev.lxObfStartGapMax = max
+		ipcDev.lxObfStartGapPresent = true
+
+	case "lx_obf_cover_interval_ms":
+		n, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_cover_interval_ms: %w", err)
+		}
+		ipcDev.lxObfCoverEveryMs = int(n)
+		ipcDev.lxObfCoverEveryPresent = true
+
+	case "lx_obf_low_entropy":
+		on, err := parseLxObfUAPI(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse lx_obf_low_entropy: %w", err)
+		}
+		ipcDev.lxObfLowEntropy = on
+		ipcDev.lxObfLowEntropyPresent = true
+	// lx:end lx_obf
+
 	case "jc":
+		if err := device.errIfLxObfBlocksAWG("jc"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		jc, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jc: %w", err)
@@ -357,6 +493,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.junk.count.Store(uint32(jc))
 
 	case "jmin":
+		if err := device.errIfLxObfBlocksAWG("jmin"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		jmin, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmin: %w", err)
@@ -366,6 +505,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.junk.min.Store(uint32(jmin))
 
 	case "jmax":
+		if err := device.errIfLxObfBlocksAWG("jmax"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		jmax, err := strconv.ParseUint(value, 10, 32)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse jmax: %w", err)
@@ -375,6 +517,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.junk.max.Store(uint32(jmax))
 
 	case "s1":
+		if err := device.errIfLxObfBlocksAWG("s1"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s1: %w", err)
@@ -382,6 +527,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.paddings.init = uint32(padding)
 
 	case "s2":
+		if err := device.errIfLxObfBlocksAWG("s2"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s2: %w", err)
@@ -389,6 +537,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.paddings.response = uint32(padding)
 
 	case "s3":
+		if err := device.errIfLxObfBlocksAWG("s3"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s3: %w", err)
@@ -396,6 +547,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.paddings.cookie = uint32(padding)
 
 	case "s4":
+		if err := device.errIfLxObfBlocksAWG("s4"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		padding, err := strconv.ParseUint(value, 10, 16)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse s4: %w", err)
@@ -431,6 +585,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.headers.transport = rang
 
 	case "i1":
+		if err := device.errIfLxObfBlocksAWG("i1"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I1: %w", err)
@@ -438,6 +595,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[0] = chain
 
 	case "i2":
+		if err := device.errIfLxObfBlocksAWG("i2"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I2: %w", err)
@@ -445,6 +605,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[1] = chain
 
 	case "i3":
+		if err := device.errIfLxObfBlocksAWG("i3"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I3: %w", err)
@@ -452,6 +615,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[2] = chain
 
 	case "i4":
+		if err := device.errIfLxObfBlocksAWG("i4"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I4: %w", err)
@@ -459,6 +625,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[3] = chain
 
 	case "i5":
+		if err := device.errIfLxObfBlocksAWG("i5"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		chain, err := newObfChain(value)
 		if err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse I5: %w", err)
@@ -466,6 +635,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		device.ipackets[4] = chain
 
 	case "header_protection_key":
+		if err := device.errIfLxObfBlocksAWG("header_protection_key"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		var key HeaderCipherKey
 		err := key.FromHex(value)
 		if err != nil {
@@ -474,6 +646,9 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		ipcDev.headerProtectionKey = key
 
 	case "content_padding_addition":
+		if err := device.errIfLxObfBlocksAWG("content_padding_addition"); err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
+		}
 		var rang UintRange
 		if err := rang.FromString(value); err != nil {
 			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse content_padding_addition: %w", err)
@@ -817,6 +992,31 @@ type ipcSetDevice struct {
 		transport uint32
 	}
 	headerProtectionKey HeaderCipherKey
+	// lx:begin lx_obf
+	lxObfPresent             bool
+	lxObfValue               bool
+	lxObfKeyPresent          bool
+	lxObfKey                 []byte
+	lxObfPersonaPresent      bool
+	lxObfPersona             string
+	lxObfPadBudgetPresent    bool
+	lxObfPadBudget           int
+	lxObfStrategyPresent     bool
+	lxObfStrategy            string
+	lxObfIdlePersonaPresent  bool
+	lxObfIdlePersona         string
+	lxObfPadProfilePresent   bool
+	lxObfPadProfile          []lxObfPadMode
+	lxObfStartCoverPresent   bool
+	lxObfStartCover          int
+	lxObfStartGapPresent     bool
+	lxObfStartGapMin         int
+	lxObfStartGapMax         int
+	lxObfCoverEveryPresent   bool
+	lxObfCoverEveryMs        int
+	lxObfLowEntropyPresent   bool
+	lxObfLowEntropy          bool
+	// lx:end lx_obf
 }
 
 func (d *ipcSetDevice) fromDevice(device *Device) {
@@ -838,7 +1038,7 @@ func (d *ipcSetDevice) fromDevice(device *Device) {
 
 func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.headerProtection.Lock()
-	defer device.headerProtection.Unlock()
+	// unlocked explicitly before lx_obf apply (not deferred) — see below
 
 	headers := []UintRange{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
 	for i := 0; i < len(headers); i++ {
@@ -847,10 +1047,22 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 			right := headers[j]
 
 			if left.Overlap(right) {
+				device.headerProtection.Unlock()
 				return errors.New("headers must not overlap")
 			}
 		}
 	}
+
+	// lx:begin lx_obf
+	wantLxObf := device.lxObfEnabled()
+	if d.lxObfPresent {
+		wantLxObf = d.lxObfValue
+	}
+	if wantLxObf && d.pendingPaddingOrHP() {
+		device.headerProtection.Unlock()
+		return errors.New("lx_obf cannot be combined with AmneziaWG padding (s1–s4) or header_protection_key")
+	}
+	// lx:end lx_obf
 
 	device.log.Verbosef("UAPI: Updating h1")
 	device.headers.init.Store(d.headers.init)
@@ -868,6 +1080,7 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 		paddings := []uint32{d.paddings.init, d.paddings.response, d.paddings.cookie, d.paddings.transport}
 		for i, padding := range paddings {
 			if padding < HeaderCipherNonceSize {
+				device.headerProtection.Unlock()
 				return fmt.Errorf("S%d must be at least %d when header_protection_key is set", i+1, HeaderCipherNonceSize)
 			}
 		}
@@ -887,6 +1100,64 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 
 	device.log.Verbosef("UAPI: Updating header protection key")
 	device.headerProtection.key = d.headerProtectionKey
+	device.headerProtection.Unlock()
+
+	// lx:begin lx_obf
+	// Applied after releasing headerProtection (awgKnobsConflictWithLxObf may RLock it).
+	if d.lxObfPresent {
+		if d.lxObfValue {
+			if err := device.awgKnobsConflictWithLxObf(); err != nil {
+				return err
+			}
+			cfg := defaultLxObfRuntimeConfig()
+			if d.lxObfPersonaPresent {
+				cfg.Persona = d.lxObfPersona
+			}
+			if d.lxObfPadBudgetPresent {
+				cfg.PadBudget = d.lxObfPadBudget
+			}
+			if d.lxObfStrategyPresent {
+				cfg.Strategy = d.lxObfStrategy
+			}
+			if d.lxObfIdlePersonaPresent {
+				cfg.IdlePersona = d.lxObfIdlePersona
+			}
+			if d.lxObfPadProfilePresent {
+				cfg.PadProfile = d.lxObfPadProfile
+			}
+			if d.lxObfStartCoverPresent {
+				cfg.StartCover = d.lxObfStartCover
+			}
+			if d.lxObfStartGapPresent {
+				cfg.StartGapMin = d.lxObfStartGapMin
+				cfg.StartGapMax = d.lxObfStartGapMax
+			}
+			if d.lxObfCoverEveryPresent {
+				cfg.CoverEveryMs = d.lxObfCoverEveryMs
+			}
+			if d.lxObfLowEntropyPresent {
+				cfg.LowEntropy = d.lxObfLowEntropy
+			}
+			var key []byte
+			if d.lxObfKeyPresent {
+				key = d.lxObfKey
+			}
+			m, err := newLxObfMorpherFromConfig(key, cfg)
+			if err != nil {
+				return err
+			}
+			device.setLxObfMorpherConfig(m, cfg, len(key) > 0)
+			if len(key) > 0 {
+				device.log.Verbosef("UAPI: lx_obf enabled (envelope persona=%s pad_budget=%d start_cover=%d)", cfg.Persona, cfg.PadBudget, cfg.StartCover)
+			} else {
+				device.log.Verbosef("UAPI: lx_obf enabled (identity morpher)")
+			}
+		} else {
+			device.setLxObfMorpherConfig(nil, lxObfRuntimeConfig{}, false)
+			device.log.Verbosef("UAPI: lx_obf disabled")
+		}
+	}
+	// lx:end lx_obf
 
 	return nil
 }

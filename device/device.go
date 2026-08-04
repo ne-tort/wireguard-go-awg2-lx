@@ -135,6 +135,11 @@ type Device struct {
 		maxHandshakeAttemps AtomicUintRange
 	}
 
+	// lx:begin lx_obf
+	// SPEC 059 — outer morpher (parallel to AmneziaWG; mutually exclusive).
+	lxObf lxObfState
+	// lx:end lx_obf
+
 	// lx: SPEC 041F — passive self-heal state (giveup / early / nudge).
 	// Mechanism lives in lx_giveup_rebind.go. Enabled by default; sing-box
 	// decides freshPort from whether the user pinned listen_port.

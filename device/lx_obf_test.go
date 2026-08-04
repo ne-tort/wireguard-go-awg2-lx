@@ -1,0 +1,236 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Copyright (C) 2026 Leadaxe / sing-box-lx. All Rights Reserved.
+ *
+ * lx: SPEC 059 — unit tests for identity / envelope / cover / conflict.
+ */
+
+package device
+
+import (
+	"bytes"
+	"errors"
+	"testing"
+)
+
+func TestIdentityLxObfRoundTrip(t *testing.T) {
+	m := newIdentityLxObf()
+	in := []byte{1, 2, 3, 4, 5}
+	sealed, err := m.Seal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sealed) != string(in) {
+		t.Fatalf("Seal changed bytes")
+	}
+	opened, err := m.Open(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(opened) != string(in) {
+		t.Fatalf("Open changed bytes")
+	}
+}
+
+func TestParseLxObfUAPI(t *testing.T) {
+	got, err := parseLxObfUAPI("true")
+	if err != nil || !got {
+		t.Fatal(err, got)
+	}
+	_, err = parseLxObfUAPI("nope")
+	if err == nil {
+		t.Fatal("expected err")
+	}
+}
+
+func TestLxObfConflictsWithJunk(t *testing.T) {
+	dev := &Device{}
+	dev.junk.count.Store(3)
+	if err := dev.awgKnobsConflictWithLxObf(); err == nil {
+		t.Fatal("expected conflict")
+	}
+}
+
+func testCfg(persona string, pad int) lxObfRuntimeConfig {
+	cfg := defaultLxObfRuntimeConfig()
+	cfg.Persona = persona
+	cfg.PadBudget = pad
+	return cfg
+}
+
+func TestEnvelopeRoundTripAndLengthHide(t *testing.T) {
+	psk := []byte("client-server-shared-secret-32b!!")
+	cli, err := newEnvelopeLxObf(psk, testCfg("quic-h3", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := newEnvelopeLxObf(psk, testCfg("balanced", 96))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wgSizes := []int{32, 64, 92, 148, 200, 1200}
+	for _, n := range wgSizes {
+		wg := bytes.Repeat([]byte{byte(n)}, n)
+		sealed, err := cli.Seal(wg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sealed) == n {
+			t.Fatalf("outer length still equals WG size %d", n)
+		}
+		for _, classic := range []int{32, 64, 92, 148} {
+			if len(sealed) == classic {
+				t.Fatalf("outer collapsed to classic %d", classic)
+			}
+		}
+		opened, err := srv.Open(sealed)
+		if err != nil {
+			t.Fatalf("open size=%d: %v", n, err)
+		}
+		if !bytes.Equal(opened, wg) {
+			t.Fatalf("round-trip mismatch size=%d", n)
+		}
+	}
+}
+
+func TestEnvelopeCoverSilent(t *testing.T) {
+	psk := []byte("cover-test-key-material-xxxxxxx")
+	m, err := newEnvelopeLxObf(psk, testCfg("dns-idle", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cover, err := m.SealCover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Open(cover)
+	if !errors.Is(err, errLxObfCover) {
+		t.Fatalf("want cover err, got %v", err)
+	}
+}
+
+func TestEnvelopeCustomProfile(t *testing.T) {
+	psk := []byte("profile-test-key-material-xxxxx")
+	cfg := testCfg("custom", 80)
+	cfg.PadProfile = []lxObfPadMode{{pad: 10, weight: 1}, {pad: 20, weight: 1}}
+	m, err := newEnvelopeLxObf(psk, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 30; i++ {
+		sealed, err := m.Seal(bytes.Repeat([]byte{1}, 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pad := len(sealed) - (64 + LxObfFixedOverhead())
+		if pad != 10 && pad != 20 && pad != 11 && pad != 21 {
+			// avoidClassic may bump by 1
+			if pad < 10 || pad > 22 {
+				t.Fatalf("unexpected pad %d", pad)
+			}
+		}
+	}
+}
+
+func TestEnvelopeWrongKey(t *testing.T) {
+	a, err := newEnvelopeLxObf([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), testCfg("balanced", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := newEnvelopeLxObf([]byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), testCfg("balanced", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := a.Seal([]byte("hello-wireguard-packet!!!!"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Open(sealed); err == nil {
+		t.Fatal("expected auth failure")
+	}
+}
+
+func TestEnvelopeReplayRejected(t *testing.T) {
+	m, err := newEnvelopeLxObf([]byte("replay-test-key-material-xxxxxx"), testCfg("dns-idle", 16))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := m.Seal(bytes.Repeat([]byte{7}, 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Open(sealed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Open(sealed); err == nil {
+		t.Fatal("expected replay rejection")
+	}
+}
+
+func TestDeriveStable(t *testing.T) {
+	k1, _ := deriveLxObfKey([]byte("psk"))
+	k2, _ := deriveLxObfKey([]byte("psk"))
+	if !bytes.Equal(k1, k2) {
+		t.Fatal("unstable")
+	}
+}
+
+func TestParsePadProfileAndGap(t *testing.T) {
+	p, err := parseLxObfPadProfile("10:2,20:3")
+	if err != nil || len(p) != 2 || p[0].pad != 10 {
+		t.Fatal(err, p)
+	}
+	min, max, err := parseLxObfGapMs("5-25")
+	if err != nil || min != 5 || max != 25 {
+		t.Fatal(err, min, max)
+	}
+}
+
+func TestEnvelopeLowEntropyAndIdlePersona(t *testing.T) {
+	psk := []byte("low-entropy-key-material-xxxxxx")
+	cfg := testCfg("quic-h3", 64)
+	cfg.IdlePersona = "dns-idle"
+	cfg.LowEntropy = true
+	cfg.Strategy = "ascii"
+	cfg.StartCover = 2
+	cfg.CoverEveryMs = 1000
+	m, err := newEnvelopeLxObf(psk, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.StartCoverCount() != 2 {
+		t.Fatal(m.StartCoverCount())
+	}
+	if m.CoverEvery() <= 0 {
+		t.Fatal("cover every")
+	}
+	// keepalive-sized → idle persona path
+	ka := bytes.Repeat([]byte{9}, MessageKeepaliveSize)
+	sealed, err := m.Seal(ka)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := m.Open(sealed)
+	if err != nil || !bytes.Equal(opened, ka) {
+		t.Fatal(err, len(opened))
+	}
+}
+
+func TestEnvelopeSealThroughputSynthetic(t *testing.T) {
+	psk := []byte("bench-key-material-xxxxxxxxxxxxx")
+	m, err := newEnvelopeLxObf(psk, testCfg("balanced", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg := bytes.Repeat([]byte{3}, 1200)
+	const N = 2000
+	for i := 0; i < N; i++ {
+		sealed, err := m.Seal(wg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.Open(sealed); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

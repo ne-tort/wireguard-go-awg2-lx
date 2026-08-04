@@ -102,6 +102,19 @@ func (peer *Peer) SendKeepalive() {
 		}
 	}
 	peer.SendStagedPackets()
+	// lx:begin lx_obf
+	// T-IDLE: optional mid-session cover datagram after keepalive cadence.
+	if cover := peer.device.lxObfMaybeIdleCover(); cover != nil {
+		peer.endpoint.Lock()
+		endpoint := peer.endpoint.val
+		peer.endpoint.Unlock()
+		if endpoint != nil {
+			peer.device.net.RLock()
+			_ = peer.device.net.bind.Send([][]byte{cover}, endpoint, MessageEncapsulatingTransportSize)
+			peer.device.net.RUnlock()
+		}
+	}
+	// lx:end lx_obf
 }
 
 func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
@@ -128,6 +141,24 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.handshake.mutex.Unlock()
 
 	peer.device.log.Verbosef("%v - Sending handshake initiation", peer)
+
+	// lx:begin lx_obf
+	// T-START: shaped cover envelopes before the real initiation (mieru/AWG jc analog).
+	// Sleep between covers happens *outside* net.RLock so bind is not held idle.
+	if covers := peer.device.lxObfBuildStartCovers(); len(covers) > 0 {
+		peer.endpoint.Lock()
+		endpoint := peer.endpoint.val
+		peer.endpoint.Unlock()
+		if endpoint != nil {
+			for i, c := range covers {
+				peer.device.lxObfStartGapSleep(i)
+				peer.device.net.RLock()
+				_ = peer.device.net.bind.Send([][]byte{c}, endpoint, MessageEncapsulatingTransportSize)
+				peer.device.net.RUnlock()
+			}
+		}
+	}
+	// lx:end lx_obf
 
 	msg, err := peer.device.CreateMessageInitiation(peer)
 	if err != nil {

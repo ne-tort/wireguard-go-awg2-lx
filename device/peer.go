@@ -142,6 +142,18 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 
+	// lx:begin lx_obf
+	if peer.device.lxObfEnabled() {
+		for i := range buffers {
+			out, err := peer.device.lxObfSeal(buffers[i])
+			if err != nil {
+				return err
+			}
+			buffers[i] = out
+		}
+	}
+	// lx:end lx_obf
+
 	err := peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
 	if err == nil {
 		var totalLen uint64
