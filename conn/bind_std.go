@@ -42,6 +42,7 @@ var _ Bind = (*StdNetBind)(nil)
 type StdNetBind struct {
 	externalControl     control.Func
 	egressProvider      EgressProvider
+	reservedAccess      sync.RWMutex
 	reservedForEndpoint map[netip.AddrPort][3]uint8
 	// lx: awg — when true, do not touch UDP payload bytes [1:4]. Those are
 	// Cloudflare WARP "reserved" bytes for plain WireGuard; AmneziaWG uses the
@@ -495,11 +496,16 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
 		retried bool
 		err     error
 	)
+	// Keep AWG skipReserved: never rewrite bytes 1-3 for AmneziaWG. When rewrite
+	// is allowed, take the map under reservedAccess — SetReservedForEndpoint can
+	// race from domain peer resolve (handshake fan-out).
 	if !s.skipReserved {
-		for _, buf := range bufs {
-			if len(buf) > offset+3 {
-				reserved, loaded := s.reservedForEndpoint[standardEndpoint.AddrPort]
-				if loaded {
+		s.reservedAccess.RLock()
+		reserved, reservedLoaded := s.reservedForEndpoint[standardEndpoint.AddrPort]
+		s.reservedAccess.RUnlock()
+		if reservedLoaded {
+			for _, buf := range bufs {
+				if len(buf) > offset+3 {
 					copy(buf[offset+1:offset+4], reserved[:])
 				}
 			}
@@ -548,7 +554,9 @@ retry:
 }
 
 func (s *StdNetBind) SetReservedForEndpoint(destination netip.AddrPort, reserved [3]byte) {
+	s.reservedAccess.Lock()
 	s.reservedForEndpoint[destination] = reserved
+	s.reservedAccess.Unlock()
 }
 
 // SetSkipReserved disables WARP reserved-byte rewrite (lx: awg).

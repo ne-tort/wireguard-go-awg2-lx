@@ -413,6 +413,11 @@ func (device *Device) BatchSize() int {
 	return size
 }
 
+// AllowedIPs returns the device's allowed IPs routing table.
+func (device *Device) AllowedIPs() *AllowedIPs {
+	return &device.allowedips
+}
+
 func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 	device.peers.RLock()
 	defer device.peers.RUnlock()

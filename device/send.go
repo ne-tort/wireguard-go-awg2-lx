@@ -142,6 +142,10 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	peer.device.log.Verbosef("%v - Sending handshake initiation", peer)
 
+	// Resolve candidates before pathology dialog / packet build so the race set
+	// is fixed for this attempt (upstream c6c8a83).
+	candidates := peer.resolveEndpoints()
+
 	// lx:begin pathology
 	// T-DIALOG / T-START: polite legend exchange (or legacy covers) before initiation.
 	// Sleep happens *outside* net.RLock so bind is not held idle.
@@ -199,7 +203,13 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	sendBuffer = append(sendBuffer, buf)
 
-	err = peer.SendBuffers(sendBuffer)
+	// Race the full AWG preamble+initiation to every candidate when a resolver
+	// is set; otherwise keep the single-path SendBuffers (pathology seal inside).
+	if len(candidates) > 0 {
+		err = peer.sendHandshakeBuffers(sendBuffer, candidates)
+	} else {
+		err = peer.SendBuffers(sendBuffer)
+	}
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
 	}
