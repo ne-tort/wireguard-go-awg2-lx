@@ -358,7 +358,13 @@ func (s *StdNetBind) receiveIP(
 		}
 	} else {
 		msg := &(*msgs)[0]
-		msg.N, msg.NN, _, msg.Addr, err = conn.ReadMsgUDP(msg.Buffers[0], msg.OOB)
+		// Go 1.26+ on Windows: ReadMsgUDP rejects non-nil empty oob the same
+		// way WriteMsgUDP does. When sticky/GSO control size is 0, pass nil.
+		oob := msg.OOB
+		if len(oob) == 0 {
+			oob = nil
+		}
+		msg.N, msg.NN, _, msg.Addr, err = conn.ReadMsgUDP(msg.Buffers[0], oob)
 		if err != nil {
 			return 0, err
 		}
@@ -586,7 +592,14 @@ func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message
 			}
 		}
 		for _, msg := range msgs {
-			_, _, err = conn.WriteMsgUDP(msg.Buffers[0], msg.OOB, msg.Addr.(*net.UDPAddr))
+			// Go 1.26+ on Windows: WriteMsgUDP rejects non-nil empty oob
+			// ("invalid pointer address"); only a true nil oob is safe when
+			// sticky/GSO control is unused (stickyControlSize+gsoControlSize==0).
+			oob := msg.OOB
+			if len(oob) == 0 {
+				oob = nil
+			}
+			_, _, err = conn.WriteMsgUDP(msg.Buffers[0], oob, msg.Addr.(*net.UDPAddr))
 			if err != nil {
 				break
 			}
