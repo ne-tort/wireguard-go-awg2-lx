@@ -418,6 +418,15 @@ func (device *Device) AllowedIPs() *AllowedIPs {
 	return &device.allowedips
 }
 
+// LookupActivePeer returns an already-configured peer by public key.
+// Unlike sagernet's on-demand LookupPeer path, we only ever have explicit peers,
+// so this is the (pk, ok) form of LookupPeer. Kept so callers (and the upstream
+// endpoint-resolver test) match the sagernet API surface. lx.
+func (device *Device) LookupActivePeer(pk NoisePublicKey) (*Peer, bool) {
+	peer := device.LookupPeer(pk)
+	return peer, peer != nil
+}
+
 func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 	device.peers.RLock()
 	defer device.peers.RUnlock()
