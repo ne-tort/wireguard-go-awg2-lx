@@ -282,21 +282,13 @@ func (table *AllowedIPs) Remove(prefix netip.Prefix, peer *Peer) {
 	node.remove()
 }
 
-func (table *AllowedIPs) RemoveByPeer(peer *Peer) {
-	table.mutex.Lock()
-	defer table.mutex.Unlock()
-
-	var next *list.Element
-	for elem := peer.trieEntries.Front(); elem != nil; elem = next {
-		next = elem.Next()
-		elem.Value.(*trieEntry).remove()
-	}
-}
-
 func (table *AllowedIPs) Insert(prefix netip.Prefix, peer *Peer) {
 	table.mutex.Lock()
 	defer table.mutex.Unlock()
+	table.insertLocked(prefix, peer)
+}
 
+func (table *AllowedIPs) insertLocked(prefix netip.Prefix, peer *Peer) {
 	if prefix.Addr().Is6() {
 		ip := prefix.Addr().As16()
 		parentIndirection{&table.IPv6, 2}.insert(ip[:], uint8(prefix.Bits()), peer)
@@ -305,6 +297,30 @@ func (table *AllowedIPs) Insert(prefix netip.Prefix, peer *Peer) {
 		parentIndirection{&table.IPv4, 2}.insert(ip[:], uint8(prefix.Bits()), peer)
 	} else {
 		panic(errors.New("inserting unknown address type"))
+	}
+}
+
+// setPeerPrefixes atomically replaces all prefixes for peer. lx: tip API for SetAllowedIPs.
+func (table *AllowedIPs) setPeerPrefixes(peer *Peer, prefixes []netip.Prefix) {
+	table.mutex.Lock()
+	defer table.mutex.Unlock()
+	table.removeByPeerLocked(peer)
+	for _, prefix := range prefixes {
+		table.insertLocked(prefix, peer)
+	}
+}
+
+func (table *AllowedIPs) RemoveByPeer(peer *Peer) {
+	table.mutex.Lock()
+	defer table.mutex.Unlock()
+	table.removeByPeerLocked(peer)
+}
+
+func (table *AllowedIPs) removeByPeerLocked(peer *Peer) {
+	var next *list.Element
+	for elem := peer.trieEntries.Front(); elem != nil; elem = next {
+		next = elem.Next()
+		elem.Value.(*trieEntry).remove()
 	}
 }
 

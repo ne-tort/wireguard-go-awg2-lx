@@ -138,6 +138,11 @@ func expiredNewHandshake(peer *Peer) {
 func expiredZeroKeyMaterial(peer *Peer) {
 	peer.device.log.Verbosef("%s - Removing all keys, since we haven't received a new one in %d seconds", peer, int((peer.device.keychainExpireTime() * 3).Seconds()))
 	peer.ZeroAndFlushAll()
+	peer.noteSessionState(PeerSessionExpired)
+	if peer.deleteOnIdle {
+		peer.device.log.Verbosef("%s - Removing idle lazy peer", peer)
+		go peer.device.RemovePeer(peer.handshake.remoteStatic)
+	}
 }
 
 func expiredPersistentKeepalive(peer *Peer) {

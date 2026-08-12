@@ -7,6 +7,7 @@ package device
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"runtime"
 	"sync"
@@ -60,6 +61,7 @@ type Device struct {
 	peers struct {
 		sync.RWMutex // protects keyMap
 		keyMap       map[NoisePublicKey]*Peer
+		lookupFunc   PeerLookupFunc // on-demand peer create (Tailscale 1.102)
 	}
 
 	rate struct {
@@ -69,6 +71,8 @@ type Device struct {
 
 	// lx: optional device-global upload/download caps (UAPI up_mbps/down_mbps).
 	bandwidth BandwidthPair
+
+	peerStateFn atomic.Pointer[PeerSessionStateFunc] // Tailscale session observer
 
 	allowedips    AllowedIPs
 	indexTable    IndexTable
@@ -420,24 +424,70 @@ func (device *Device) AllowedIPs() *AllowedIPs {
 }
 
 // LookupActivePeer returns an already-configured peer by public key.
-// Unlike sagernet's on-demand LookupPeer path, we only ever have explicit peers,
-// so this is the (pk, ok) form of LookupPeer. Kept so callers (and the upstream
-// endpoint-resolver test) match the sagernet API surface. lx.
+// Unlike LookupPeer, this never invokes PeerLookupFunc. lx.
 func (device *Device) LookupActivePeer(pk NoisePublicKey) (*Peer, bool) {
-	peer := device.LookupPeer(pk)
-	return peer, peer != nil
-}
-
-func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 	device.peers.RLock()
 	defer device.peers.RUnlock()
-
-	return device.peers.keyMap[pk]
+	peer, ok := device.peers.keyMap[pk]
+	return peer, ok
 }
+
+// LookupPeer looks up a peer by public key. If missing and a PeerLookupFunc is
+// set, the peer is created on demand (Tailscale lazy peers). lx: sagernet tip.
+func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
+	device.peers.RLock()
+	p, ok := device.peers.keyMap[pk]
+	lookupFunc := device.peers.lookupFunc
+	device.peers.RUnlock()
+	if ok || lookupFunc == nil {
+		return p
+	}
+
+	conf, ok := lookupFunc(pk)
+	if !ok || conf == nil {
+		return nil
+	}
+
+	p, err := device.NewPeer(pk)
+	if err != nil {
+		if errors.Is(err, errAddExistingPeer) {
+			device.peers.RLock()
+			defer device.peers.RUnlock()
+			return device.peers.keyMap[pk]
+		}
+		device.log.Errorf("Failed to create peer: %v", err)
+		return nil
+	}
+	p.SetAllowedIPs(conf.AllowedIPs)
+	p.deleteOnIdle = true
+	if conf.Endpoint != nil {
+		p.SetEndpointFromPacket(conf.Endpoint)
+	}
+	p.Start()
+	return p
+}
+
+var errAddExistingPeer = errors.New("adding existing peer")
+
+// NewPeerConfig are the configuration parameters for a peer created via PeerLookupFunc.
+type NewPeerConfig struct {
+	AllowedIPs []netip.Prefix
+	Endpoint   conn.Endpoint
+}
+
+// PeerLookupFunc creates peers on demand when receiving packets for unknown keys.
+type PeerLookupFunc func(NoisePublicKey) (_ *NewPeerConfig, ok bool)
 
 // PeerByIPPacketFunc looks up a peer for an outbound IP packet by src/dst.
 // See AllowedIPs.LookupFromPacket. lx: sagernet tip API for Tailscale 1.102.
 type PeerByIPPacketFunc func(src, dst netip.Addr, ipPkt []byte) (_ NoisePublicKey, ok bool)
+
+// SetPeerLookupFunc sets the on-demand peer factory used by LookupPeer.
+func (device *Device) SetPeerLookupFunc(f PeerLookupFunc) {
+	device.peers.Lock()
+	defer device.peers.Unlock()
+	device.peers.lookupFunc = f
+}
 
 // SetPeerByIPPacketFunc sets the callback used by LookupFromPacket instead of
 // the AllowedIPs trie (Tailscale installs this for MagicDNS/4via6 peer routing).
@@ -446,6 +496,28 @@ func (device *Device) SetPeerByIPPacketFunc(f PeerByIPPacketFunc) {
 	defer device.allowedips.mutex.Unlock()
 	device.allowedips.peerByIPPacketFunc = f
 	device.allowedips.device = device
+}
+
+// PeerSessionState is the current WireGuard session state for a peer.
+type PeerSessionState uint8
+
+const (
+	PeerSessionNone PeerSessionState = iota
+	PeerSessionHandshake
+	PeerSessionEstablished
+	PeerSessionExpired
+)
+
+// PeerSessionStateFunc observes peer WireGuard session state changes.
+type PeerSessionStateFunc func(peer NoisePublicKey, state PeerSessionState)
+
+// SetSessionStateFunc sets the observer for peer session state transitions.
+func (device *Device) SetSessionStateFunc(f PeerSessionStateFunc) {
+	if f == nil {
+		device.peerStateFn.Store(nil)
+		return
+	}
+	device.peerStateFn.Store(&f)
 }
 
 func (device *Device) RemovePeer(key NoisePublicKey) {
@@ -468,6 +540,19 @@ func (device *Device) RemoveAllPeers() {
 	}
 
 	device.peers.keyMap = make(map[NoisePublicKey]*Peer)
+}
+
+// RemoveMatchingPeers removes peers for which shouldRemove returns true.
+func (device *Device) RemoveMatchingPeers(shouldRemove func(NoisePublicKey) bool) (numRemoved int) {
+	device.peers.Lock()
+	defer device.peers.Unlock()
+	for key, peer := range device.peers.keyMap {
+		if shouldRemove(key) {
+			removePeerLocked(device, peer, key)
+			numRemoved++
+		}
+	}
+	return numRemoved
 }
 
 func (device *Device) Close() {

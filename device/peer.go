@@ -8,6 +8,7 @@ package device
 import (
 	"container/list"
 	"errors"
+	"net/netip"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,9 @@ type Peer struct {
 	lastHandshakeNano atomic.Int64   // nano seconds since epoch
 
 	queuedOutboundPackets atomic.Int32 // packets in staged+outbound queues, for input backpressure
+
+	// deleteOnIdle: peer was auto-created via PeerLookupFunc; remove when idle. lx.
+	deleteOnIdle bool
 
 	endpoint struct {
 		sync.Mutex
@@ -51,6 +55,11 @@ type Peer struct {
 
 	state struct {
 		sync.Mutex // protects against concurrent Start/Stop
+	}
+
+	sessionState struct {
+		sync.Mutex
+		current PeerSessionState
 	}
 
 	queue struct {
@@ -96,7 +105,7 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	// map public key
 	_, ok := device.peers.keyMap[pk]
 	if ok {
-		return nil, errors.New("adding existing peer")
+		return nil, errAddExistingPeer
 	}
 
 	// pre-compute DH
@@ -120,6 +129,13 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	device.peers.keyMap[pk] = peer
 
 	return peer, nil
+}
+
+// SetAllowedIPs replaces this peer's AllowedIPs prefixes. lx: tip API for lazy peers.
+func (p *Peer) SetAllowedIPs(allowedIPs []netip.Prefix) {
+	p.state.Lock()
+	defer p.state.Unlock()
+	p.device.allowedips.setPeerPrefixes(p, slices.Clone(allowedIPs))
 }
 
 // SendBuffers sends buffers to peer. WireGuard packet data in each element of
@@ -234,6 +250,11 @@ func (peer *Peer) Start() {
 	go peer.RoutineSequentialReceiver(batchSize)
 
 	peer.isRunning.Store(true)
+
+	// Lazy peers (PeerLookupFunc) must expire if no session material arrives.
+	if peer.deleteOnIdle {
+		peer.timers.zeroKeyMaterial.Mod(peer.device.keychainExpireTime() * 3)
+	}
 }
 
 func (peer *Peer) ZeroAndFlushAll() {
@@ -299,6 +320,31 @@ func (peer *Peer) Stop() {
 	peer.device.queue.encryption.wg.Done() // no more writes to encryption queue from us
 
 	peer.ZeroAndFlushAll()
+}
+
+func (peer *Peer) noteSessionState(state PeerSessionState) {
+	peer.sessionState.Lock()
+	defer peer.sessionState.Unlock()
+	peer.noteSessionStateLocked(state)
+}
+
+func (peer *Peer) noteSessionStateLocked(state PeerSessionState) {
+	if peer.sessionState.current == state {
+		return
+	}
+	peer.sessionState.current = state
+	if f := peer.device.peerStateFn.Load(); f != nil {
+		(*f)(peer.handshake.remoteStatic, state)
+	}
+}
+
+func (peer *Peer) noteSessionHandshakeStarted() {
+	peer.sessionState.Lock()
+	defer peer.sessionState.Unlock()
+	if peer.sessionState.current == PeerSessionEstablished {
+		return
+	}
+	peer.noteSessionStateLocked(PeerSessionHandshake)
 }
 
 func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {

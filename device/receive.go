@@ -499,6 +499,7 @@ func (device *Device) RoutineHandshake(id int) {
 				goto skip
 			}
 
+			peer.noteSessionState(PeerSessionEstablished)
 			peer.timersSessionDerived()
 			peer.timersHandshakeComplete()
 			peer.SendKeepalive()

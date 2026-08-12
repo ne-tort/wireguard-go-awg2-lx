@@ -124,6 +124,8 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		peer.timers.maxHandshakeAttempts.Store(peer.device.maxHandshakeAttemps())
 	}
 
+	peer.noteSessionHandshakeStarted()
+
 	timeout := peer.device.rekeyMinTimeout()
 
 	peer.handshake.mutex.RLock()
@@ -249,6 +251,7 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
+	peer.noteSessionState(PeerSessionEstablished)
 	peer.timersSessionDerived()
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
