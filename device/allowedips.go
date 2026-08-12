@@ -208,6 +208,11 @@ type AllowedIPs struct {
 	IPv4  *trieEntry
 	IPv6  *trieEntry
 	mutex sync.RWMutex
+
+	// peerByIPPacketFunc, when set, replaces trie lookup for outbound packets
+	// (Tailscale 1.102 PeerByIPPacketFunc). lx: port from sagernet wireguard-go tip.
+	peerByIPPacketFunc PeerByIPPacketFunc
+	device             *Device
 }
 
 func (table *AllowedIPs) EntriesForPeer(peer *Peer, cb func(prefix netip.Prefix) bool) {
@@ -311,6 +316,32 @@ func (table *AllowedIPs) Lookup(ip []byte) *Peer {
 		return table.IPv6.lookup(ip)
 	case net.IPv4len:
 		return table.IPv4.lookup(ip)
+	default:
+		panic(errors.New("looking up unknown address type"))
+	}
+}
+
+// LookupFromPacket looks up the peer for an outbound IP packet. When a
+// PeerByIPPacketFunc is registered, that callback is used instead of the trie.
+// Otherwise only dst is used (standard AllowedIPs trie). lx: sagernet tip API.
+func (table *AllowedIPs) LookupFromPacket(src, dst netip.Addr, ipPkt []byte) *Peer {
+	table.mutex.RLock()
+	if f := table.peerByIPPacketFunc; f != nil {
+		device := table.device
+		table.mutex.RUnlock()
+		if pubk, ok := f(src, dst, ipPkt); ok {
+			return device.LookupPeer(pubk)
+		}
+		return nil
+	}
+	defer table.mutex.RUnlock()
+	switch {
+	case dst.Is6():
+		a := dst.As16()
+		return table.IPv6.lookup(a[:])
+	case dst.Is4():
+		a := dst.As4()
+		return table.IPv4.lookup(a[:])
 	default:
 		panic(errors.New("looking up unknown address type"))
 	}

@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"time"
@@ -374,15 +375,17 @@ func (device *Device) RoutineReadFromTUN() {
 				if len(elem.packet) < ipv4.HeaderLen {
 					continue
 				}
-				dst := elem.packet[IPv4offsetDst : IPv4offsetDst+net.IPv4len]
-				peer = device.allowedips.Lookup(dst)
+				src := netip.AddrFrom4([4]byte(elem.packet[IPv4offsetSrc : IPv4offsetSrc+net.IPv4len]))
+				dst := netip.AddrFrom4([4]byte(elem.packet[IPv4offsetDst : IPv4offsetDst+net.IPv4len]))
+				peer = device.allowedips.LookupFromPacket(src, dst, elem.packet)
 
 			case 6:
 				if len(elem.packet) < ipv6.HeaderLen {
 					continue
 				}
-				dst := elem.packet[IPv6offsetDst : IPv6offsetDst+net.IPv6len]
-				peer = device.allowedips.Lookup(dst)
+				src := netip.AddrFrom16([16]byte(elem.packet[IPv6offsetSrc : IPv6offsetSrc+net.IPv6len]))
+				dst := netip.AddrFrom16([16]byte(elem.packet[IPv6offsetDst : IPv6offsetDst+net.IPv6len]))
+				peer = device.allowedips.LookupFromPacket(src, dst, elem.packet)
 
 			default:
 				device.log.Verbosef("Received packet with unknown IP version")
@@ -441,6 +444,49 @@ func (device *Device) RoutineReadFromTUN() {
 // each), so without this cap a flood is buffered instead of dropped.
 const maxQueuedInputPackets = 2048
 
+func (device *Device) inputPacketPeer(destination []byte, packetSlices [][]byte) *Peer {
+	var src, dst netip.Addr
+	switch len(destination) {
+	case net.IPv4len:
+		dst = netip.AddrFrom4([4]byte(destination))
+		var srcBytes [net.IPv4len]byte
+		if !gatherPacketBytes(packetSlices, IPv4offsetSrc, srcBytes[:]) {
+			return nil
+		}
+		src = netip.AddrFrom4(srcBytes)
+	case net.IPv6len:
+		dst = netip.AddrFrom16([16]byte(destination))
+		var srcBytes [net.IPv6len]byte
+		if !gatherPacketBytes(packetSlices, IPv6offsetSrc, srcBytes[:]) {
+			return nil
+		}
+		src = netip.AddrFrom16(srcBytes)
+	default:
+		return nil
+	}
+	var ipPkt []byte
+	if len(packetSlices) == 1 {
+		ipPkt = packetSlices[0]
+	}
+	return device.allowedips.LookupFromPacket(src, dst, ipPkt)
+}
+
+func gatherPacketBytes(packetSlices [][]byte, offset int, destination []byte) bool {
+	for _, packetSlice := range packetSlices {
+		if offset >= len(packetSlice) {
+			offset -= len(packetSlice)
+			continue
+		}
+		n := copy(destination, packetSlice[offset:])
+		destination = destination[n:]
+		offset = 0
+		if len(destination) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (device *Device) outboundContentPadBudget() int {
 	if addition := device.contentPaddingAddition.Load(); !addition.IsZero() {
 		return int(addition.Hi())
@@ -449,7 +495,7 @@ func (device *Device) outboundContentPadBudget() int {
 }
 
 func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
-	peer := device.allowedips.Lookup(destination)
+	peer := device.inputPacketPeer(destination, packetSlices)
 	if peer == nil {
 		return
 	}
@@ -496,7 +542,7 @@ func (device *Device) InputPackets(packets []*InputPacketRef) []*InputPacketRef 
 	var unmatched []*InputPacketRef
 	elemsByPeer := make(map[*Peer][]*QueueOutboundElementsContainer, len(packets))
 	for _, packetRef := range packets {
-		peer := device.allowedips.Lookup(packetRef.Destination)
+		peer := device.inputPacketPeer(packetRef.Destination, packetRef.PacketSlices)
 		if peer == nil {
 			unmatched = append(unmatched, packetRef)
 			continue

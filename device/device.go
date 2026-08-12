@@ -7,6 +7,7 @@ package device
 
 import (
 	"context"
+	"net/netip"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -432,6 +433,19 @@ func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 	defer device.peers.RUnlock()
 
 	return device.peers.keyMap[pk]
+}
+
+// PeerByIPPacketFunc looks up a peer for an outbound IP packet by src/dst.
+// See AllowedIPs.LookupFromPacket. lx: sagernet tip API for Tailscale 1.102.
+type PeerByIPPacketFunc func(src, dst netip.Addr, ipPkt []byte) (_ NoisePublicKey, ok bool)
+
+// SetPeerByIPPacketFunc sets the callback used by LookupFromPacket instead of
+// the AllowedIPs trie (Tailscale installs this for MagicDNS/4via6 peer routing).
+func (device *Device) SetPeerByIPPacketFunc(f PeerByIPPacketFunc) {
+	device.allowedips.mutex.Lock()
+	defer device.allowedips.mutex.Unlock()
+	device.allowedips.peerByIPPacketFunc = f
+	device.allowedips.device = device
 }
 
 func (device *Device) RemovePeer(key NoisePublicKey) {
