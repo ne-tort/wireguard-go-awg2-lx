@@ -8,6 +8,7 @@ package device
 import (
 	"container/list"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
