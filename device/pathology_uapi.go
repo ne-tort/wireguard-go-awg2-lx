@@ -71,6 +71,12 @@ func (device *Device) awgKnobsConflictWithPathology() error {
 	if !device.contentPaddingAddition.Load().IsZero() {
 		return errors.New("pathology cannot be combined with AmneziaWG content_padding_addition")
 	}
+	if device.randomTrailers.Load() {
+		return errors.New("pathology cannot be combined with AmneziaWG random_trailers")
+	}
+	if device.disableCookies.Load() {
+		return errors.New("pathology cannot be combined with AmneziaWG disable_cookies")
+	}
 	return nil
 }
 

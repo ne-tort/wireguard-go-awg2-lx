@@ -71,6 +71,7 @@ type Peer struct {
 	cookieGenerator             CookieGenerator
 	trieEntries                 list.List
 	persistentKeepaliveInterval AtomicUintRange
+	udpWindow                   atomic.Uint32
 
 	// lx: optional per-peer upload/download caps (UAPI up_mbps/down_mbps).
 	bandwidth BandwidthPair
@@ -95,6 +96,8 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 
 	// create peer
 	peer := new(Peer)
+
+	peer.udpWindow.Store(DefaultUdpWindow)
 
 	peer.cookieGenerator.Init(pk)
 	peer.device = device
@@ -352,6 +355,9 @@ func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
 	defer peer.endpoint.Unlock()
 	if peer.endpoint.disableRoaming {
 		return
+	}
+	if peer.endpoint.val != endpoint {
+		peer.udpWindow.Store(DefaultUdpWindow)
 	}
 	peer.endpoint.clearSrcOnTx = false
 	peer.endpoint.val = endpoint

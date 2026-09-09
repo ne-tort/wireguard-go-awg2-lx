@@ -53,11 +53,12 @@ type QueueOutboundElement struct {
 	// is either:
 	//  a) MessageEncapsulatingTransportSize+padding+MessageTransportHeaderSize (plaintext)
 	//  b) 0 / padding-inclusive (post-encryption)
-	packet  []byte
-	nonce   uint64   // nonce for encryption
-	keypair *Keypair // keypair for encryption
-	peer    *Peer    // related peer
-	padding uint32   // AmneziaWG S4 leading padding (HP nonce source)
+	packet      []byte
+	nonce       uint64   // nonce for encryption
+	keypair     *Keypair // keypair for encryption
+	peer        *Peer    // related peer
+	padding     uint32   // AmneziaWG S4 leading padding (HP nonce source)
+	isKeepalive bool     // lx: AmneziaWG 3.1 — distinguish keepalive from CPA/trailer zero-pad
 }
 
 type QueueOutboundElementsContainer struct {
@@ -70,6 +71,7 @@ func (device *Device) NewOutboundElement() *QueueOutboundElement {
 	elem.buffer = device.GetOutboundBuffer(MaxMessageSize)
 	elem.nonce = 0
 	elem.padding = device.paddings.transport.Load()
+	elem.isKeepalive = false
 	// keypair and peer were cleared (if necessary) by clearPointers.
 	return elem
 }
@@ -83,6 +85,7 @@ func (elem *QueueOutboundElement) clearPointers() {
 	elem.packet = nil
 	elem.keypair = nil
 	elem.peer = nil
+	elem.isKeepalive = false
 }
 
 /* Queues a keepalive if no packets are queued for peer
@@ -90,6 +93,7 @@ func (elem *QueueOutboundElement) clearPointers() {
 func (peer *Peer) SendKeepalive() {
 	if len(peer.queue.staged) == 0 && peer.isRunning.Load() {
 		elem := peer.device.NewOutboundElement()
+		elem.isKeepalive = true
 		elemsContainer := peer.device.GetOutboundElementsContainer()
 		elemsContainer.elems = append(elemsContainer.elems, elem)
 		select {
@@ -182,8 +186,13 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
 
-	padding := peer.device.paddings.init.Load()
-	buf := make([]byte, int(padding)+MessageInitiationSize)
+	padding := int(peer.device.paddings.init.Load())
+	trailerLen := peer.randomTrailer(padding + MessageInitiationSize)
+	if trailerLen < 0 {
+		trailerLen = 0
+	}
+
+	buf := make([]byte, padding+MessageInitiationSize+trailerLen)
 
 	crypt := buf[:padding]
 	rand.Read(crypt)
@@ -203,6 +212,9 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	if cip != nil {
 		cip.XORKeyStream(packet, packet)
 	}
+
+	trailer := buf[padding+MessageInitiationSize:]
+	rand.Read(trailer)
 
 	sendBuffer = append(sendBuffer, buf)
 
@@ -234,8 +246,13 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
-	padding := peer.device.paddings.response.Load()
-	buf := make([]byte, int(padding)+MessageResponseSize)
+	padding := int(peer.device.paddings.response.Load())
+	trailerLen := peer.randomTrailer(padding + MessageResponseSize)
+	if trailerLen < 0 {
+		trailerLen = 0
+	}
+
+	buf := make([]byte, padding+MessageResponseSize+trailerLen)
 
 	crypt := buf[:padding]
 	rand.Read(crypt)
@@ -264,6 +281,9 @@ func (peer *Peer) SendHandshakeResponse() error {
 		cip.XORKeyStream(packet, packet)
 	}
 
+	trailer := buf[padding+MessageResponseSize:]
+	rand.Read(trailer)
+
 	// TODO: allocation could be avoided
 	err = peer.SendBuffers([][]byte{buf})
 	if err != nil {
@@ -289,8 +309,13 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		return err
 	}
 
-	padding := device.paddings.cookie.Load()
-	buf := make([]byte, int(padding)+MessageCookieReplySize)
+	padding := int(device.paddings.cookie.Load())
+	trailerLen := device.randomTrailer(padding + MessageCookieReplySize)
+	if trailerLen < 0 {
+		trailerLen = 0
+	}
+
+	buf := make([]byte, padding+MessageCookieReplySize+trailerLen)
 
 	crypt := buf[:padding]
 	rand.Read(crypt)
@@ -306,6 +331,9 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 	if cip != nil {
 		cip.XORKeyStream(packet, packet)
 	}
+
+	trailer := buf[padding+MessageCookieReplySize:]
+	rand.Read(trailer)
 
 	// TODO: allocation could be avoided
 	device.net.bind.Send([][]byte{buf}, initiatingElem.endpoint, 0)
@@ -493,6 +521,9 @@ func gatherPacketBytes(packetSlices [][]byte, offset int, destination []byte) bo
 func (device *Device) outboundContentPadBudget() int {
 	if addition := device.contentPaddingAddition.Load(); !addition.IsZero() {
 		return int(addition.Hi())
+	}
+	if device.randomTrailers.Load() {
+		return DefaultUdpWindow
 	}
 	return PaddingMultiple
 }
@@ -721,25 +752,47 @@ func calculatePaddingSize(packetSize, mtu int) int {
 	return paddedSize - lastUnit
 }
 
-func (device *Device) randomPaddingAddition(packetSize, mtu int) int {
-	addition := device.contentPaddingAddition.Load()
+func (peer *Peer) randomPaddingAddition(packetSize int) int {
+	addition := peer.device.contentPaddingAddition.Load()
 
 	if addition.IsZero() {
 		return -1
 	}
 
-	add := int(addition.PickOne())
-	if mtu != 0 {
-		if packetSize > mtu {
-			packetSize %= mtu
-		}
+	udpWindow := int(peer.udpWindow.Load())
+	if udpWindow < packetSize {
+		return 0
+	}
 
-		space := mtu - packetSize
-		if add > space {
-			add = space
-		}
+	add := int(addition.PickOne())
+	space := udpWindow - packetSize
+	if add > space {
+		add = space
 	}
 	return add
+}
+
+func (device *Device) randomTrailer(packetSize int) int {
+	if !device.randomTrailers.Load() {
+		return -1
+	}
+
+	if DefaultUdpWindow < packetSize {
+		return 0
+	}
+	return int(fastrandn(uint32(DefaultUdpWindow - packetSize)))
+}
+
+func (peer *Peer) randomTrailer(packetSize int) int {
+	if !peer.device.randomTrailers.Load() {
+		return -1
+	}
+
+	udpWindow := int(peer.udpWindow.Load())
+	if udpWindow < packetSize {
+		return 0
+	}
+	return int(fastrandn(uint32(udpWindow - packetSize)))
 }
 
 /* Encrypts the elements in the queue
@@ -755,6 +808,11 @@ func (device *Device) RoutineEncryption(id int) {
 
 	for elemsContainer := range device.queue.encryption.c {
 		for _, elem := range elemsContainer.elems {
+			udpWindow := elem.padding + MinMessageSize + uint32(len(elem.packet))
+			if elem.peer.udpWindow.Load() < udpWindow {
+				elem.peer.udpWindow.Store(udpWindow)
+			}
+
 			// fill crypto padding
 			crypt := elem.buffer[:elem.padding]
 			rand.Read(crypt)
@@ -770,13 +828,16 @@ func (device *Device) RoutineEncryption(id int) {
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 
-			packetSize := len(elem.packet)
+			packetSize := len(elem.packet) + MinMessageSize + int(elem.padding)
 			mtu := int(device.tun.mtu.Load())
 
-			paddingSize := device.randomPaddingAddition(packetSize, mtu)
+			paddingSize := elem.peer.randomPaddingAddition(packetSize)
+			if paddingSize < 0 {
+				paddingSize = elem.peer.randomTrailer(packetSize)
+			}
 			if paddingSize < 0 {
 				// pad content to multiple of 16
-				paddingSize = calculatePaddingSize(packetSize, mtu)
+				paddingSize = calculatePaddingSize(len(elem.packet), mtu)
 			}
 
 			// append trailing zeroes
@@ -846,10 +907,8 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			if elem.packet == nil {
 				continue
 			}
-			// lx: awg — amneziawg-go v3.0.1 compares against MessageKeepaliveSize
-			// only (ignores S4), so with S4>0 every keepalive looks like data.
-			// Count the leading S-padding so timers match real keepalive size.
-			if len(elem.packet) != int(elem.padding)+MessageKeepaliveSize {
+			// lx: AmneziaWG 3.1 — isKeepalive flag (CPA/trailer zero-pad must not look like data).
+			if !elem.isKeepalive {
 				dataSent = true
 				dataBytes += len(elem.packet)
 			}

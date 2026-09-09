@@ -140,6 +140,10 @@ type Device struct {
 		maxHandshakeAttemps AtomicUintRange
 	}
 
+	// lx: AmneziaWG 3.1 — RandomTrailers / DisableCookies (must-match / local policy).
+	randomTrailers atomic.Bool
+	disableCookies atomic.Bool
+
 	// lx:begin pathology
 	// SPEC 059 — outer morpher (parallel to AmneziaWG; mutually exclusive).
 	pathology pathologyState
