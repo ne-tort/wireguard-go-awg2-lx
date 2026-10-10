@@ -111,72 +111,6 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 		// lx:begin pathology
 		if device.pathologyEnabled() {
 			sendf("pathology=true")
-			device.pathology.mu.RLock()
-			cfg := device.pathology.cfg
-			hasKey := device.pathology.hasKey
-			device.pathology.mu.RUnlock()
-			if hasKey {
-				sendf("pathology_key=set")
-			}
-			if cfg.Persona != "" {
-				sendf("pathology_persona=%s", cfg.Persona)
-			}
-			sendf("pathology_pad_budget=%d", cfg.PadBudget)
-			if cfg.Strategy != "" && cfg.Strategy != "auto" {
-				sendf("pathology_pad_strategy=%s", cfg.Strategy)
-			}
-			if cfg.IdlePersona != "" {
-				sendf("pathology_idle_persona=%s", cfg.IdlePersona)
-			}
-			if cfg.StartCover > 0 {
-				sendf("pathology_start_cover=%d", cfg.StartCover)
-			}
-			if cfg.StartGapMin != 0 || cfg.StartGapMax != 0 {
-				if cfg.StartGapMin == cfg.StartGapMax {
-					sendf("pathology_start_gap_ms=%d", cfg.StartGapMin)
-				} else {
-					sendf("pathology_start_gap_ms=%d-%d", cfg.StartGapMin, cfg.StartGapMax)
-				}
-			}
-			if cfg.CoverEveryMs > 0 {
-				sendf("pathology_cover_interval_ms=%d", cfg.CoverEveryMs)
-			}
-			if cfg.LowEntropy {
-				sendf("pathology_low_entropy=true")
-			}
-			if prof := formatPathologyPadProfile(cfg.PadProfile); prof != "" {
-				sendf("pathology_pad_profile=%s", prof)
-			}
-			if cfg.Frame != "" && cfg.Frame != pathologyFrameNone {
-				sendf("pathology_frame=%s", cfg.Frame)
-			}
-			if cfg.FrameDCIDLen > 0 {
-				sendf("pathology_frame_dcid_len=%d", cfg.FrameDCIDLen)
-			}
-			if cfg.StartDecoy != "" && cfg.StartDecoy != "none" {
-				sendf("pathology_start_decoy=%s", cfg.StartDecoy)
-			}
-			if cfg.Cipher != "" && cfg.Cipher != pathologyCipherAEAD {
-				sendf("pathology_cipher=%s", cfg.Cipher)
-			}
-			if cfg.Preset != "" && cfg.Preset != pathologyPresetCustom {
-				sendf("pathology_preset=%s", cfg.Preset)
-			}
-			if cfg.RotateSec != pathologyDefaultRotateSec {
-				sendf("pathology_rotate_sec=%d", cfg.RotateSec)
-			}
-			if cfg.Intensity != 0 && cfg.Intensity != pathologyDefaultIntensity {
-				sendf("pathology_intensity=%d", cfg.Intensity)
-			}
-			if cfg.Mode != "" {
-				sendf("pathology_mode=%s", cfg.Mode)
-			}
-			if cfg.Dialog != "" && cfg.Dialog != pathologyDialogAuto {
-				sendf("pathology_dialog=%s", cfg.Dialog)
-			}
-			if cfg.Auto {
-				sendf("pathology_auto=true")
-			}
 		}
 		// lx:end pathology
 
@@ -431,183 +365,6 @@ func (device *Device) handleDeviceLine(ipcDev *ipcSetDevice, key, value string) 
 		}
 		device.log.Verbosef("UAPI: Removing all peers")
 		device.RemoveAllPeers()
-
-	// lx:begin pathology
-	case "pathology":
-		on, err := parsePathologyUAPI(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology: %w", err)
-		}
-		ipcDev.pathologyPresent = true
-		ipcDev.pathologyValue = on
-
-	case "pathology_key":
-		key, err := parsePathologyKeyUAPI(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_key: %w", err)
-		}
-		ipcDev.pathologyKey = key
-		ipcDev.pathologyKeyPresent = true
-
-	case "pathology_persona":
-		persona, err := normalizePathologyPersona(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyPersona = persona
-		ipcDev.pathologyPersonaPresent = true
-
-	case "pathology_pad_budget":
-		n, err := strconv.ParseUint(value, 10, 8)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_pad_budget: %w", err)
-		}
-		ipcDev.pathologyPadBudget = int(n)
-		ipcDev.pathologyPadBudgetPresent = true
-
-	case "pathology_pad_strategy":
-		s, err := normalizePathologyStrategy(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyStrategy = s
-		ipcDev.pathologyStrategyPresent = true
-
-	case "pathology_idle_persona":
-		persona, err := normalizePathologyPersona(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyIdlePersona = persona
-		ipcDev.pathologyIdlePersonaPresent = true
-
-	case "pathology_pad_profile":
-		prof, err := parsePathologyPadProfile(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_pad_profile: %w", err)
-		}
-		ipcDev.pathologyPadProfile = prof
-		ipcDev.pathologyPadProfilePresent = true
-
-	case "pathology_start_cover":
-		n, err := strconv.ParseUint(value, 10, 8)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_start_cover: %w", err)
-		}
-		ipcDev.pathologyStartCover = int(n)
-		ipcDev.pathologyStartCoverPresent = true
-
-	case "pathology_start_gap_ms":
-		min, max, err := parsePathologyGapMs(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_start_gap_ms: %w", err)
-		}
-		ipcDev.pathologyStartGapMin = min
-		ipcDev.pathologyStartGapMax = max
-		ipcDev.pathologyStartGapPresent = true
-
-	case "pathology_cover_interval_ms":
-		n, err := strconv.ParseUint(value, 10, 32)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_cover_interval_ms: %w", err)
-		}
-		ipcDev.pathologyCoverEveryMs = int(n)
-		ipcDev.pathologyCoverEveryPresent = true
-
-	case "pathology_low_entropy":
-		on, err := parsePathologyUAPI(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_low_entropy: %w", err)
-		}
-		ipcDev.pathologyLowEntropy = on
-		ipcDev.pathologyLowEntropyPresent = true
-
-	case "pathology_frame":
-		f, err := normalizePathologyFrame(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyFrame = f
-		ipcDev.pathologyFramePresent = true
-
-	case "pathology_frame_dcid_len":
-		n, err := strconv.ParseUint(value, 10, 8)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_frame_dcid_len: %w", err)
-		}
-		if n > 20 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "pathology_frame_dcid_len must be 0..20")
-		}
-		ipcDev.pathologyFrameDCIDLen = int(n)
-		ipcDev.pathologyFrameDCIDPresent = true
-
-	case "pathology_start_decoy":
-		dcy, err := normalizePathologyStartDecoy(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyStartDecoy = dcy
-		ipcDev.pathologyStartDecoyPresent = true
-
-	case "pathology_cipher":
-		ciph, err := normalizePathologyCipher(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyCipher = ciph
-		ipcDev.pathologyCipherPresent = true
-
-	case "pathology_preset":
-		pre, err := normalizePathologyPreset(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyPreset = pre
-		ipcDev.pathologyPresetPresent = true
-
-	case "pathology_rotate_sec":
-		n, err := strconv.ParseUint(value, 10, 32)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_rotate_sec: %w", err)
-		}
-		ipcDev.pathologyRotateSec = int(n)
-		ipcDev.pathologyRotateSecPresent = true
-
-	case "pathology_intensity":
-		n, err := strconv.ParseUint(value, 10, 8)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_intensity: %w", err)
-		}
-		if n < 1 || n > 5 {
-			return ipcErrorf(ipc.IpcErrorInvalid, "pathology_intensity must be 1..5")
-		}
-		ipcDev.pathologyIntensity = int(n)
-		ipcDev.pathologyIntensityPresent = true
-
-	case "pathology_mode":
-		mode, err := normalizePathologyMode(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyMode = mode
-		ipcDev.pathologyModePresent = true
-
-	case "pathology_dialog":
-		d, err := normalizePathologyDialog(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "%w", err)
-		}
-		ipcDev.pathologyDialog = d
-		ipcDev.pathologyDialogPresent = true
-
-	case "pathology_auto":
-		on, err := parsePathologyUAPI(value)
-		if err != nil {
-			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse pathology_auto: %w", err)
-		}
-		ipcDev.pathologyAuto = on
-		ipcDev.pathologyAutoPresent = true
-	// lx:end pathology
 
 	case "jc":
 		if err := device.errIfPathologyBlocksAWG("jc"); err != nil {
@@ -1137,51 +894,6 @@ type ipcSetDevice struct {
 		transport uint32
 	}
 	headerProtectionKey HeaderCipherKey
-	// lx:begin pathology
-	pathologyPresent             bool
-	pathologyValue               bool
-	pathologyKeyPresent          bool
-	pathologyKey                 []byte
-	pathologyPersonaPresent      bool
-	pathologyPersona             string
-	pathologyPadBudgetPresent    bool
-	pathologyPadBudget           int
-	pathologyStrategyPresent     bool
-	pathologyStrategy            string
-	pathologyIdlePersonaPresent  bool
-	pathologyIdlePersona         string
-	pathologyPadProfilePresent   bool
-	pathologyPadProfile          []pathologyPadMode
-	pathologyStartCoverPresent   bool
-	pathologyStartCover          int
-	pathologyStartGapPresent     bool
-	pathologyStartGapMin         int
-	pathologyStartGapMax         int
-	pathologyCoverEveryPresent   bool
-	pathologyCoverEveryMs        int
-	pathologyLowEntropyPresent   bool
-	pathologyLowEntropy          bool
-	pathologyFramePresent        bool
-	pathologyFrame               string
-	pathologyFrameDCIDPresent    bool
-	pathologyFrameDCIDLen        int
-	pathologyStartDecoyPresent   bool
-	pathologyStartDecoy          string
-	pathologyCipherPresent       bool
-	pathologyCipher              string
-	pathologyPresetPresent       bool
-	pathologyPreset              string
-	pathologyRotateSecPresent    bool
-	pathologyRotateSec           int
-	pathologyIntensityPresent    bool
-	pathologyIntensity           int
-	pathologyModePresent         bool
-	pathologyMode                string
-	pathologyDialogPresent       bool
-	pathologyDialog              string
-	pathologyAutoPresent         bool
-	pathologyAuto                bool
-	// lx:end pathology
 }
 
 func (d *ipcSetDevice) fromDevice(device *Device) {
@@ -1203,7 +915,7 @@ func (d *ipcSetDevice) fromDevice(device *Device) {
 
 func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.headerProtection.Lock()
-	// unlocked explicitly before pathology apply (not deferred) — see below
+	// unlocked explicitly on every early-return path (not deferred)
 
 	headers := []UintRange{d.headers.init, d.headers.response, d.headers.cookie, d.headers.transport}
 	for i := 0; i < len(headers); i++ {
@@ -1219,11 +931,7 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	}
 
 	// lx:begin pathology
-	wantPathology := device.pathologyEnabled()
-	if d.pathologyPresent {
-		wantPathology = d.pathologyValue
-	}
-	if wantPathology && d.pendingPaddingOrHP() {
+	if device.pathologyEnabled() && d.pendingPaddingOrHP() {
 		device.headerProtection.Unlock()
 		return errors.New("pathology cannot be combined with AmneziaWG padding (s1–s4) or header_protection_key")
 	}
@@ -1266,96 +974,6 @@ func (d *ipcSetDevice) mergeWithDevice(device *Device) error {
 	device.log.Verbosef("UAPI: Updating header protection key")
 	device.headerProtection.key = d.headerProtectionKey
 	device.headerProtection.Unlock()
-
-	// lx:begin pathology
-	// Applied after releasing headerProtection (awgKnobsConflictWithPathology may RLock it).
-	if d.pathologyPresent {
-		if d.pathologyValue {
-			if err := device.awgKnobsConflictWithPathology(); err != nil {
-				return err
-			}
-			cfg := defaultPathologyRuntimeConfig()
-			if d.pathologyPersonaPresent {
-				cfg.Persona = d.pathologyPersona
-			}
-			if d.pathologyPadBudgetPresent {
-				cfg.PadBudget = d.pathologyPadBudget
-			}
-			if d.pathologyStrategyPresent {
-				cfg.Strategy = d.pathologyStrategy
-			}
-			if d.pathologyIdlePersonaPresent {
-				cfg.IdlePersona = d.pathologyIdlePersona
-			}
-			if d.pathologyPadProfilePresent {
-				cfg.PadProfile = d.pathologyPadProfile
-			}
-			if d.pathologyStartCoverPresent {
-				cfg.StartCover = d.pathologyStartCover
-			}
-			if d.pathologyStartGapPresent {
-				cfg.StartGapMin = d.pathologyStartGapMin
-				cfg.StartGapMax = d.pathologyStartGapMax
-			}
-			if d.pathologyCoverEveryPresent {
-				cfg.CoverEveryMs = d.pathologyCoverEveryMs
-			}
-			if d.pathologyLowEntropyPresent {
-				cfg.LowEntropy = d.pathologyLowEntropy
-			}
-			if d.pathologyFramePresent {
-				cfg.Frame = d.pathologyFrame
-			}
-			if d.pathologyFrameDCIDPresent {
-				cfg.FrameDCIDLen = d.pathologyFrameDCIDLen
-			}
-			if d.pathologyStartDecoyPresent {
-				cfg.StartDecoy = d.pathologyStartDecoy
-			}
-			if d.pathologyCipherPresent {
-				cfg.Cipher = d.pathologyCipher
-			}
-			if d.pathologyPresetPresent {
-				cfg.Preset = d.pathologyPreset
-			}
-			if d.pathologyRotateSecPresent {
-				cfg.RotateSec = d.pathologyRotateSec
-			}
-			if d.pathologyIntensityPresent {
-				cfg.Intensity = d.pathologyIntensity
-			}
-			if d.pathologyModePresent {
-				cfg.Mode = d.pathologyMode
-			}
-			if d.pathologyDialogPresent {
-				cfg.Dialog = d.pathologyDialog
-			}
-			if d.pathologyAutoPresent {
-				cfg.Auto = d.pathologyAuto
-			}
-			var key []byte
-			if d.pathologyKeyPresent {
-				key = d.pathologyKey
-			}
-			m, err := newPathologyMorpherFromConfig(key, cfg)
-			if err != nil {
-				return err
-			}
-			if env, ok := m.(*envelopePathology); ok {
-				cfg = env.cfg // resolved preset/cipher/frame
-			}
-			device.setPathologyMorpherConfig(m, cfg, len(key) > 0)
-			if len(key) > 0 {
-				device.log.Verbosef("UAPI: pathology enabled (envelope persona=%s cipher=%s frame=%s dialog=%s auto=%v intensity=%d rotate_sec=%d)", cfg.Persona, cfg.Cipher, cfg.Frame, cfg.Dialog, cfg.Auto, cfg.Intensity, cfg.RotateSec)
-			} else {
-				device.log.Verbosef("UAPI: pathology enabled (identity morpher)")
-			}
-		} else {
-			device.setPathologyMorpherConfig(nil, pathologyRuntimeConfig{}, false)
-			device.log.Verbosef("UAPI: pathology disabled")
-		}
-	}
-	// lx:end pathology
 
 	return nil
 }

@@ -101,6 +101,11 @@ func expiredRetransmitHandshake(peer *Peer) {
 			peer.timers.zeroKeyMaterial.Mod(peer.device.keychainExpireTime() * 3)
 		}
 
+		/* lx: SPEC 084 T-VARIANT — the exhausted cycle also means the current
+		 * morph shape may be the thing being dropped: rotate the PathologyWG
+		 * appearance before the self-heal re-initiates. */
+		peer.device.pathologyMaybeRotateVariant("giveup")
+
 		/* lx: SPEC 041F — the exhausted cycle just proved the current socket's
 		 * 5-tuple dead. Rebind once and re-initiate (see lx_giveup_rebind.go). */
 		peer.device.handleHandshakeGiveUp(peer)
@@ -110,6 +115,14 @@ func expiredRetransmitHandshake(peer *Peer) {
 
 		/* lx: SPEC 041F v2 — early self-heal on provably dead session. */
 		peer.device.maybeEarlyGiveUpRebind(peer)
+
+		/* lx: SPEC 084 T-VARIANT — an unanswered initiation may be a DPI drop
+		 * of this exact shape; every retransmit (from the 2nd unanswered one
+		 * on) presents the next morph variant. Debounced per device, so a
+		 * multi-peer failure burst rotates once, not per peer. */
+		if peer.timers.handshakeAttempts.Load() >= 2 {
+			peer.device.pathologyMaybeRotateVariant("retry")
+		}
 
 		/* We clear the endpoint address src address, in case this is the cause of trouble. */
 		peer.markEndpointSrcForClearing()

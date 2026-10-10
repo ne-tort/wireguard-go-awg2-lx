@@ -154,83 +154,100 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	candidates := peer.resolveEndpoints()
 
 	// lx:begin pathology
-	// T-DIALOG / T-START: polite legend exchange (or legacy covers) before initiation.
-	// Sleep happens *outside* net.RLock so bind is not held idle.
-	peer.endpoint.Lock()
-	endpoint := peer.endpoint.val
-	peer.endpoint.Unlock()
-	if endpoint != nil {
-		peer.device.pathologyRunStartDialog(func(pkt []byte) {
-			peer.device.net.RLock()
-			_ = peer.device.net.bind.Send([][]byte{pkt}, endpoint, MessageEncapsulatingTransportSize)
-			peer.device.net.RUnlock()
-		})
-	}
-	// lx:end pathology
+	// T-DIALOG / T-START: the polite prelude (legend dialog or cover burst)
+	// sleeps between datagrams, so when one is configured the prelude AND the
+	// initiation run on a dedicated goroutine. SendHandshakeInitiation is
+	// reachable from RoutineReadFromTUN and RoutineSequentialReceiver via
+	// SendStagedPackets; a 40–250 ms sleep on those paths would stall the whole
+	// device (N5-4). Ordering inside the goroutine keeps "legend before WG".
+	sendInitiation := func() error {
+		msg, err := peer.device.CreateMessageInitiation(peer)
+		if err != nil {
+			peer.device.log.Errorf("%v - Failed to create initiation message: %v", peer, err)
+			return err
+		}
 
-	msg, err := peer.device.CreateMessageInitiation(peer)
-	if err != nil {
-		peer.device.log.Errorf("%v - Failed to create initiation message: %v", peer, err)
+		var sendBuffer [][]byte
+
+		for _, ipacket := range peer.device.ipackets {
+			if ipacket != nil {
+				buf := make([]byte, ipacket.ObfuscatedLen(0))
+				ipacket.Obfuscate(buf, nil)
+				sendBuffer = append(sendBuffer, buf)
+			}
+		}
+
+		sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
+
+		padding := int(peer.device.paddings.init.Load())
+		trailerLen := peer.randomTrailer(padding + MessageInitiationSize)
+		if trailerLen < 0 {
+			trailerLen = 0
+		}
+
+		buf := make([]byte, padding+MessageInitiationSize+trailerLen)
+
+		crypt := buf[:padding]
+		rand.Read(crypt)
+
+		writer := bytes.NewBuffer(buf[padding:padding])
+		binary.Write(writer, binary.LittleEndian, msg)
+		packet := writer.Bytes()
+		peer.cookieGenerator.AddMacs(packet)
+
+		peer.timersAnyAuthenticatedPacketTraversal()
+		peer.timersAnyAuthenticatedPacketSent()
+
+		cip, err := peer.device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
+		if err != nil {
+			return err
+		}
+		if cip != nil {
+			cip.XORKeyStream(packet, packet)
+		}
+
+		trailer := buf[padding+MessageInitiationSize:]
+		rand.Read(trailer)
+
+		sendBuffer = append(sendBuffer, buf)
+
+		// Race the full AWG preamble+initiation to every candidate when a resolver
+		// is set; otherwise keep the single-path SendBuffers (pathology seal inside).
+		if len(candidates) > 0 {
+			err = peer.sendHandshakeBuffers(sendBuffer, candidates)
+		} else {
+			err = peer.SendBuffers(sendBuffer)
+		}
+		if err != nil {
+			peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
+		}
+		peer.timersHandshakeInitiated()
+
 		return err
 	}
 
-	var sendBuffer [][]byte
-
-	for _, ipacket := range peer.device.ipackets {
-		if ipacket != nil {
-			buf := make([]byte, ipacket.ObfuscatedLen(0))
-			ipacket.Obfuscate(buf, nil)
-			sendBuffer = append(sendBuffer, buf)
+	if prelude := peer.device.pathologyStartPrelude(); prelude != nil {
+		peer.endpoint.Lock()
+		endpoint := peer.endpoint.val
+		peer.endpoint.Unlock()
+		if endpoint != nil {
+			go func() {
+				send := func(pkt []byte) {
+					peer.device.net.RLock()
+					_ = peer.device.net.bind.Send([][]byte{pkt}, endpoint, MessageEncapsulatingTransportSize)
+					peer.device.net.RUnlock()
+				}
+				prelude(send)
+				if peer.device.isClosed() {
+					return
+				}
+				_ = sendInitiation()
+			}()
+			return nil
 		}
 	}
-
-	sendBuffer = append(sendBuffer, peer.device.JunkPackets()...)
-
-	padding := int(peer.device.paddings.init.Load())
-	trailerLen := peer.randomTrailer(padding + MessageInitiationSize)
-	if trailerLen < 0 {
-		trailerLen = 0
-	}
-
-	buf := make([]byte, padding+MessageInitiationSize+trailerLen)
-
-	crypt := buf[:padding]
-	rand.Read(crypt)
-
-	writer := bytes.NewBuffer(buf[padding:padding])
-	binary.Write(writer, binary.LittleEndian, msg)
-	packet := writer.Bytes()
-	peer.cookieGenerator.AddMacs(packet)
-
-	peer.timersAnyAuthenticatedPacketTraversal()
-	peer.timersAnyAuthenticatedPacketSent()
-
-	cip, err := peer.device.HeaderProtectionCipher(crypt[:HeaderCipherNonceSize])
-	if err != nil {
-		return err
-	}
-	if cip != nil {
-		cip.XORKeyStream(packet, packet)
-	}
-
-	trailer := buf[padding+MessageInitiationSize:]
-	rand.Read(trailer)
-
-	sendBuffer = append(sendBuffer, buf)
-
-	// Race the full AWG preamble+initiation to every candidate when a resolver
-	// is set; otherwise keep the single-path SendBuffers (pathology seal inside).
-	if len(candidates) > 0 {
-		err = peer.sendHandshakeBuffers(sendBuffer, candidates)
-	} else {
-		err = peer.SendBuffers(sendBuffer)
-	}
-	if err != nil {
-		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
-	}
-	peer.timersHandshakeInitiated()
-
-	return err
+	return sendInitiation()
+	// lx:end pathology
 }
 
 func (peer *Peer) SendHandshakeResponse() error {
