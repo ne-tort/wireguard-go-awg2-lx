@@ -467,6 +467,9 @@ func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 	if conf.Endpoint != nil {
 		p.SetEndpointFromPacket(conf.Endpoint)
 	}
+	p.handshake.mutex.Lock()
+	p.handshake.presharedKey = conf.PresharedKey
+	p.handshake.mutex.Unlock()
 	p.Start()
 	return p
 }
@@ -477,6 +480,10 @@ var errAddExistingPeer = errors.New("adding existing peer")
 type NewPeerConfig struct {
 	AllowedIPs []netip.Prefix
 	Endpoint   conn.Endpoint
+	// PresharedKey is the optional WireGuard pre-shared key for the peer.
+	// Zero value = none. lx: Tailscale 1.102 mod.5 passes it through
+	// wgcfg.NewPeerLookupFunc.
+	PresharedKey NoisePresharedKey
 }
 
 // PeerLookupFunc creates peers on demand when receiving packets for unknown keys.

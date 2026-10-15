@@ -363,6 +363,14 @@ func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
 	peer.endpoint.val = endpoint
 }
 
+// SetPresharedKey updates the peer's handshake pre-shared key. lx: Tailscale
+// 1.102 mod.5 calls it from userspaceEngine.SyncDevicePeer.
+func (peer *Peer) SetPresharedKey(key NoisePresharedKey) {
+	peer.handshake.mutex.Lock()
+	peer.handshake.presharedKey = key
+	peer.handshake.mutex.Unlock()
+}
+
 // SetEndpointResolver sets a function providing the candidate endpoints for
 // this peer. It is invoked on every handshake initiation, and the initiation
 // is sent to the current endpoint and every candidate; the source of the
